@@ -45,7 +45,9 @@ S3ctor: Reticle assets and T4rg3t5 logic.
 Hrnchamd: Surface orientation math.
 MisterSmellies: Rappel/hanging inspiration.
 Lightningrodbombom: Real Telekinesis concept.
-BeamFX contributors: Shared depth-aware filament renderer and consumer adapter template.
+Slowchu, BeamFX contributors: Shared depth-aware filament renderer and consumer adapter template.
+SahJop: original construction and design.
+DubiousNPC: Animations
 
 ### Extension
 This mod is freely available for further modification or extension.
