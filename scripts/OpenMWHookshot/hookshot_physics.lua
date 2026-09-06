@@ -142,8 +142,33 @@ function Physics.removeByTarget(target)
     end)
 end
 
+-- Returns true only if the sequence was actually queued on a ragdoll this
+-- system is still stepping.
+--
+-- [BUGFIX] This used to insert unconditionally. removeByTarget() compacts an
+-- entry out of ragDollData but the ragdoll TABLE stays alive wherever it was
+-- captured -- notably in the item menu's closure, which holds it for as long
+-- as the menu is open. Adding a sequence to that orphan silently succeeded,
+-- update() never walked it, completeCurrentSequence() never ran, and the
+-- ITEM_DROP_COMPLETE event that returns the player to IDLE never fired. The
+-- FIRING pose is played with forceLoop, so it looped until the next reload.
+--
+-- Callers must act on the result: a queued sequence is a promise that a
+-- completion event will arrive, and that promise cannot be kept here.
 function Physics.addSequence(ragdoll, sequence)
+    if not ragdoll or not ragdoll.seqs then return false end
+
+    local tracked = false
+    for i = 1, #ragDollData do
+        if ragDollData[i] == ragdoll then tracked = true break end
+    end
+    if not tracked then
+        debugPrint("addSequence on an untracked ragdoll; refusing to queue")
+        return false
+    end
+
     table.insert(ragdoll.seqs, sequence)
+    return true
 end
 
 -- ==============================================

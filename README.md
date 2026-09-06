@@ -40,14 +40,12 @@ the pull begins; Hook Travel Speed is configurable in Basic Settings.
 - Self-pulling can sometimes be visually jittery in open areas. Lower Pull Speed in the options.
 
 ### Credits:
-imarchnemesis: Original Hookshot mod.    
-S3ctor: Reticle assets and T4rg3t5 logic.     
-Hrnchamd: Surface orientation math.     
-MisterSmellies: Rappel/hanging inspiration.    
-Lightningrodbombom: Real Telekinesis concept.    
-Slowchu, BeamFX contributors: Shared depth-aware filament renderer and consumer adapter template.   
-Sahjop: Original design and construction
-DubiousNPC: Animations    
-      
+imarchnemesis: Original Hookshot mod.
+S3ctor: Reticle assets and T4rg3t5 logic.
+Hrnchamd: Surface orientation math.
+MisterSmellies: Rappel/hanging inspiration.
+Lightningrodbombom: Real Telekinesis concept.
+BeamFX contributors: Shared depth-aware filament renderer and consumer adapter template.
+
 ### Extension
 This mod is freely available for further modification or extension.

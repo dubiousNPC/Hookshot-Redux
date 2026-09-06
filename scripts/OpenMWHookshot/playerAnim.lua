@@ -146,7 +146,7 @@ end
 -- pose it was previously holding.
 --
 -- THE RELEASE IS THE WHOLE POINT OF THIS HELPER. Every pose here is played
--- with loops = -1, forceLoop = true, autoDisable = false, so it runs until
+-- with forceLoop = true, autoDisable = false, so it runs until
 -- something explicitly cancels it. playLoop/playLoopAlt used to just
 -- overwrite currentGroup and leave the outgoing group running - the engine
 -- kept looping it forever, and stopAnim() could no longer name it to
@@ -182,7 +182,12 @@ local function playPose(group, priority, blendMask)
         stopKey = "stop",
         priority = priority,
         blendMask = blendMask,
-        loops = -1,
+        -- loops is documented as ">= 0, the number of times the animation
+        -- should loop AFTER the first play". -1 is out of contract -- the
+        -- infinite convention belongs to playQueued, not playBlended -- and
+        -- was redundant anyway: forceLoop is what actually holds the pose
+        -- open, and autoDisable = false is what keeps it in the active list.
+        loops = 0,
         forceLoop = true,
         autoDisable = false,
     })

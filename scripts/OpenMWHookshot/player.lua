@@ -824,19 +824,28 @@ handleItemMenuAction = function(action, ragdoll)
         Physics.removeByTarget(item)
         setMode(HookshotState.IDLE)
 
-    elseif action == 'drop' then
-        -- Drop the item with gravity
-        if ragdoll then
-            Physics.addSequence(ragdoll, Physics.createDropSequence())
-        end
-        setMode(HookshotState.FIRING)  -- Back to firing to monitor the drop
-
     else
-        -- 'cancel' or unknown - just drop the item
-        if ragdoll then
-            Physics.addSequence(ragdoll, Physics.createDropSequence())
+        -- 'drop', 'cancel', and any unknown action all mean: let it fall.
+        --
+        -- [BUGFIX] setMode(FIRING) used to be unconditional while the sequence
+        -- was guarded. FIRING is only ever left again when
+        -- ITEM_DROP_COMPLETE arrives, and that event only exists if the drop
+        -- sequence was really queued on a tracked ragdoll. If the ragdoll had
+        -- been dropped from the physics registry while the menu was open --
+        -- timeout, cell change, any removeByTarget -- the sequence went onto
+        -- an orphaned table, no event ever came, and the FIRING pose looped
+        -- until reload.
+        --
+        -- So FIRING is now entered only when something can take us out of it.
+        -- Otherwise go straight to IDLE, which releases the pose via
+        -- Anim.onStateChange -> stopAnim().
+        local dropping = ragdoll and Physics.addSequence(ragdoll, Physics.createDropSequence())
+        if dropping then
+            setMode(HookshotState.FIRING)  -- monitor the drop
+        else
+            debugPrint("Item drop could not be queued; returning to IDLE directly")
+            setMode(HookshotState.IDLE)
         end
-        setMode(HookshotState.FIRING)
     end
     
     -- Clear menu state
