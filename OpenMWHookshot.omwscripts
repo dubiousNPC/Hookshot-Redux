@@ -1,0 +1,5 @@
+PLAYER: scripts/OpenMWHookshot/player.lua
+PLAYER: scripts/SharedRay/SharedRay_v2.lua
+PLAYER: scripts/OpenMWHookshot/example_beam_consumer/player.lua
+GLOBAL: scripts/OpenMWHookshot/global.lua
+GLOBAL: scripts/OpenMWHookshot/example_beam_consumer/global.lua
