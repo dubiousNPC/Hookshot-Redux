@@ -69,6 +69,11 @@ local visuals
 -- after a load or a provider epoch change. Returning true tells the
 -- adapter reconstruction succeeded and shouldn't be retried.
 local function reconstructPersistentVisuals(adapter, reason)
+    -- Fires on load and on provider epoch change. A new provider generation
+    -- can hand out different space keys, so anything derived from the old one
+    -- has to go. Nothing else to rebuild: a rope in flight is transient and
+    -- the player script republishes it next frame.
+    clearDerivedCaches()
     return true
 end
 
@@ -90,6 +95,28 @@ local removeUnsupported = false
 -- generation's space so a rare interior/worldspace transition can remove and
 -- recreate the same stable rope id instead of waiting for transient expiry.
 local activeSpaceByBeamId = {}
+
+-- ==============================================
+-- PER-UPDATE CACHES
+-- ==============================================
+-- onRopeUpdate runs EVERY FRAME during a pull: the endpoints move ~25 units
+-- per frame at default pull speed, far past the publisher's 2-unit gate. So
+-- everything derivable on this path that does not change per frame is cached
+-- here, on OUR side of the adapter boundary.
+--
+-- spaceKeyForCell() is the expensive one: inside the adapter it allocates a
+-- closure and runs two pcalls per call. It is deterministic per cell for a
+-- given provider generation, so cache it per cell and invalidate whenever the
+-- provider resets - that is exactly what the reconstruct callback signals.
+local spaceKeyByCell = setmetatable({}, { __mode = "k" })
+
+-- sender.id never changes, so the concat only ever needs doing once.
+local beamIdBySender = setmetatable({}, { __mode = "k" })
+
+local function clearDerivedCaches()
+    spaceKeyByCell = setmetatable({}, { __mode = "k" })
+    beamIdBySender = setmetatable({}, { __mode = "k" })
+end
 
 -- ==============================================
 -- VALIDATION
@@ -115,7 +142,13 @@ local function isPlayer(object)
     -- world.players is a core engine list; indexing it and taking its
     -- length cannot raise, so neither read needs a guard.
     local players = world.players
-    for index = 1, #players do
+    -- Fast path: vanilla OpenMW has exactly one player, and this runs every
+    -- frame during a pull. The loop below stays for correctness under any
+    -- multiplayer fork rather than being replaced by it.
+    if players[1] == object then
+        return true
+    end
+    for index = 2, #players do
         if players[index] == object then
             return true
         end
@@ -136,21 +169,48 @@ end
 -- same beam instead of spawning new ones. Multiplayer-safe by construction
 -- even though vanilla OpenMW only ever has one player.
 local function beamIdFor(sender)
+    local cached = beamIdBySender[sender]
+    if cached then return cached end
+
     local id = sender.id
+    local beamId
     if type(id) ~= "string" then
-        return "dbs_hookshot_rope"
+        beamId = "dbs_hookshot_rope"
+    else
+        beamId = "dbs_hookshot_rope_" .. id
     end
-    return "dbs_hookshot_rope_" .. id
+    beamIdBySender[sender] = beamId
+    return beamId
 end
 
 local function ropeSpec(spaceKey, from, to)
+    -- Appearance fields written inline rather than copied from
+    -- ROPE_APPEARANCE with pairs(). They are constant, so the loop was
+    -- re-deriving the same eleven hash writes plus iterator overhead every
+    -- frame of every pull.
+    --
+    -- The tables are still allocated fresh each call and NOT reused. Reusing
+    -- them would remove five allocations per frame, but this spec is handed
+    -- across the boundary to BeamFX and nothing in the adapter or its docs
+    -- promises the provider copies it rather than retaining the reference.
+    -- Mutating a table another mod may still be holding is not a trade worth
+    -- making for five allocations; revisit only with that behaviour confirmed.
     local segment = {
         startPos = from,
         endPos = to,
+        style = ROPE_APPEARANCE.style,
+        radius = ROPE_APPEARANCE.radius,
+        minPixelWidth = ROPE_APPEARANCE.minPixelWidth,
+        outerColor = ROPE_APPEARANCE.outerColor,
+        coreColor = ROPE_APPEARANCE.coreColor,
+        baseColor = ROPE_APPEARANCE.baseColor,
+        coreRatio = ROPE_APPEARANCE.coreRatio,
+        intensity = ROPE_APPEARANCE.intensity,
+        opacity = ROPE_APPEARANCE.opacity,
+        baseOpacity = ROPE_APPEARANCE.baseOpacity,
+        depthSoftness = ROPE_APPEARANCE.depthSoftness,
+        fogInfluence = ROPE_APPEARANCE.fogInfluence,
     }
-    for field, value in pairs(ROPE_APPEARANCE) do
-        segment[field] = value
-    end
 
     return {
         spaceKey = spaceKey,
@@ -183,9 +243,13 @@ local function onRopeUpdate(request)
         return
     end
 
-    local spaceKey = visuals:spaceKeyForCell(cell)
+    local spaceKey = spaceKeyByCell[cell]
     if spaceKey == nil then
-        return
+        spaceKey = visuals:spaceKeyForCell(cell)
+        if spaceKey == nil then
+            return
+        end
+        spaceKeyByCell[cell] = spaceKey
     end
 
     local beamId = beamIdFor(request.sender)
@@ -236,11 +300,13 @@ end
 
 local function onLoad()
     activeSpaceByBeamId = {}
+    clearDerivedCaches()
     visuals:reset("load")
 end
 
 local function onNewGame()
     activeSpaceByBeamId = {}
+    clearDerivedCaches()
     visuals:reset("new_game")
 end
 
