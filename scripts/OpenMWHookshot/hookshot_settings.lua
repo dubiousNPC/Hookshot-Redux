@@ -1,12 +1,6 @@
 ---@omw-context player
 
---[[
-    hookshot_settings.lua
-    Settings registration, reactive access, and debug utilities for hookshot mod.
-
-    All settings are accessed via function calls that read from storage live,
-    so changes in the settings menu take effect immediately without reloadlua.
-]]--
+-- Settings registration, live accessors, equipment gates, debugPrint.
 
 local interfaces = require('openmw.interfaces')
 local storage = require('openmw.storage')
@@ -26,14 +20,8 @@ settings.MOD_VERSION = "0.4.3-beta"
 -- ==============================================
 -- EQUIPMENT GATES (GLOVE + PER-FEATURE UNLOCKS)
 -- ==============================================
--- Each gate is a LIST of recordIds; equipping ANY id in a list satisfies
--- that gate. Ids are compared case-insensitively.
---
--- GLOVE_RECORD_IDS is the base gate: without one of these equipped the
--- hookshot can't be drawn at all. Both ids below ship in Hookshot.omwaddon
--- (dbs_hookshot_ar is the ARMO "Hookshot", dbs_hookshot is the CLOT
--- "Hook shot") - previously only the ARMO passed the gate, so the
--- clothing variant silently did nothing.
+-- Each gate is a list of recordIds; any one equipped satisfies it. Case-insensitive.
+-- GLOVE_RECORD_IDS: the four ARMO hookshots in Hookshot.omwaddon.
 settings.GLOVE_RECORD_IDS = {
     "dbs_hookshot_adv",
     "dbs_hookshot_item",
@@ -41,24 +29,13 @@ settings.GLOVE_RECORD_IDS = {
     "dbs_hookshot_ar",
 }
 
--- ITEM_TARGET_RECORD_IDS gates the item-targeting feature specifically:
--- reticle lock-on and pull for carriable items. Add the recordId(s) of
--- whatever upgraded glove / focus / ring should unlock telekinetic pull,
--- e.g. { "dbs_hookshot_ar_mk2" }.
---
--- EMPTY LIST = INHERIT THE BASE GATE. Leaving this empty preserves the
--- pre-gate behaviour (any hookshot can pull items) so upgrading the mod
--- doesn't silently remove a working feature. Populate it to lock the
--- feature behind a specific item.
+-- ITEM_TARGET_RECORD_IDS gates item pull. Empty = same as the glove gate.
 settings.ITEM_TARGET_RECORD_IDS = {}
 
--- Builds a lookup set of every equipped recordId, lowercased, in ONE pass
--- over the equipment table (~12 entries, no raycasts, no iteration over
--- nearby objects). All gates below read from this one set, so adding a
--- fourth or fifth gate costs nothing extra at the call site.
+-- One pass over the equipment table into a lowercase id set.
 local function equippedRecordIdSet(actor)
     local equipped = {}
-    local equipment = types.Actor.equipment(actor or self)
+    local equipment = types.Actor.getEquipment(actor or self)
     for _, item in pairs(equipment) do
         if item and item.recordId then
             equipped[item.recordId:lower()] = true
@@ -76,18 +53,11 @@ local function anyEquipped(equipped, recordIds)
     return false
 end
 
--- Resolves EVERY gate from a single equipment scan. Returns a plain table
--- so call sites can cache it for the duration of a draw.
---
--- Deliberately NOT wired into onUpdate/onFrame: call this from input-
--- triggered code (the HookshotActivate handler and fireHookshot) so the
--- cost is paid once per key press instead of every frame. See player.lua's
--- refreshCapabilities() for the call sites.
+-- Every gate from one equipment scan. Call on input, not per frame.
 function settings.capabilities(actor)
     local equipped = equippedRecordIdSet(actor)
     local hasGlove = anyEquipped(equipped, settings.GLOVE_RECORD_IDS)
 
-    -- An empty unlock list means "no extra requirement beyond the glove".
     local itemTargeting
     if #settings.ITEM_TARGET_RECORD_IDS == 0 then
         itemTargeting = hasGlove
@@ -99,11 +69,6 @@ function settings.capabilities(actor)
         glove = hasGlove,
         itemTargeting = itemTargeting,
     }
-end
-
--- Kept for compatibility with any existing call sites.
-function settings.isGloveEquipped(actor)
-    return settings.capabilities(actor).glove
 end
 
 -- ==============================================
@@ -124,14 +89,13 @@ settings.RETICLE_TEXTURE_PATH = 'textures/s3/crosshair/'
 settings.FALLBACK_TEXTURE_PATH = 'Textures/'
 settings.useFallbackTextures = false
 
--- Scan for available reticle icons from T4rg3t5
+-- T4rg3t5 icons first, then this mod's own, then a hardcoded default.
 for icon in vfs.pathsWithPrefix(settings.RETICLE_TEXTURE_PATH) do
     if icon:find('.dds') then
         settings.iconNames[#settings.iconNames + 1] = icon:match('.*/(.-)%.')
     end
 end
 
--- If no T4rg3t5 icons found, scan for hookshot's own textures
 if #settings.iconNames == 0 then
     settings.useFallbackTextures = true
     for icon in vfs.pathsWithPrefix(settings.FALLBACK_TEXTURE_PATH) do
@@ -141,7 +105,6 @@ if #settings.iconNames == 0 then
     end
 end
 
--- Ultimate fallback - hardcoded default
 if #settings.iconNames == 0 then
     settings.iconNames = { 'hookshot_circle' }
 end
@@ -159,7 +122,6 @@ interfaces.Settings.registerPage {
 -- ==============================================
 -- REGISTER INPUT TRIGGERS (must be done before settings that reference them)
 -- ==============================================
-print("[HOOKSHOT] Registering input triggers and actions...")
 
 input.registerTrigger {
     key = 'HookshotActivate',
@@ -167,7 +129,6 @@ input.registerTrigger {
     name = '',
     description = '',
 }
-print("[HOOKSHOT] Registered trigger: HookshotActivate")
 
 input.registerTrigger {
     key = 'HookshotSheath',
@@ -175,7 +136,6 @@ input.registerTrigger {
     name = '',
     description = '',
 }
-print("[HOOKSHOT] Registered trigger: HookshotSheath")
 
 input.registerAction {
     key = 'HookshotRappelUp',
@@ -185,7 +145,6 @@ input.registerAction {
     type = input.ACTION_TYPE.Boolean,
     defaultValue = false,
 }
-print("[HOOKSHOT] Registered action: HookshotRappelUp")
 
 input.registerAction {
     key = 'HookshotRappelDown',
@@ -195,7 +154,6 @@ input.registerAction {
     type = input.ACTION_TYPE.Boolean,
     defaultValue = false,
 }
-print("[HOOKSHOT] Registered action: HookshotRappelDown")
 
 input.registerAction {
     key = 'HookshotRappelRelease',
@@ -205,9 +163,7 @@ input.registerAction {
     type = input.ACTION_TYPE.Boolean,
     defaultValue = false,
 }
-print("[HOOKSHOT] Registered action: HookshotRappelRelease")
 
-print("[HOOKSHOT] All triggers and actions registered")
 
 -- ==============================================
 -- BASIC SETTINGS
@@ -254,12 +210,7 @@ interfaces.Settings.registerGroup {
 -- ==============================================
 -- GRAPPLE HANDOFF SETTINGS
 -- ==============================================
--- The last stretch of a non-rappel grapple is deliberately NOT teleported.
--- The drag aims slightly above the landing point and releases short of it,
--- letting the engine's own movement/gravity carry the player the rest of
--- the way. That keeps the mod out of the collision solver at exactly the
--- moment it's most likely to shove the player through geometry, and leaves
--- the final approach visible to other movement mods.
+-- The drag aims above the landing and releases short; engine movement finishes it.
 interfaces.Settings.registerGroup {
     key = "Settings_OpenMW_Hookshot_Handoff",
     page = "OpenMWHookshotPg",
@@ -399,9 +350,7 @@ local handoffSection = storage.playerSection("Settings_OpenMW_Hookshot_Handoff")
 -- ==============================================
 -- REACTIVE ACCESSORS
 -- ==============================================
--- Each call reads live from storage (just a hash table lookup).
 
--- Basic settings
 function settings.maxRange()           return basicSection:get("MAX_HOOKSHOT_RANGE") end
 function settings.pullSpeed()          return basicSection:get("PULL_SPD") end
 function settings.hookTravelSpeed()    return basicSection:get("HOOK_TRAVEL_SPEED") or 4000 end
@@ -410,11 +359,9 @@ function settings.rappelFunMode()      return basicSection:get("RAPPEL_FUN_MODE"
 function settings.minRappelClearance() return basicSection:get("MIN_RAPPEL_CLEARANCE") end
 function settings.debugMode()          return basicSection:get("DEBUG_MODE") end
 
--- Handoff settings
 function settings.handoffRise()        return handoffSection:get("HANDOFF_RISE") or 0 end
 function settings.handoffDistance()    return handoffSection:get("HANDOFF_DISTANCE") or 0 end
 
--- Reticle settings
 function settings.reticleIcon()        return reticleSection:get("RETICLE_ICON") end
 function settings.reticleIdleSize()    return reticleSection:get("RETICLE_IDLE_SIZE") end
 function settings.reticleMinSize()     return reticleSection:get("RETICLE_MIN_SIZE") end
@@ -423,7 +370,7 @@ function settings.reticleMinDistance()  return reticleSection:get("RETICLE_MIN_D
 function settings.reticleMaxDistance()  return reticleSection:get("RETICLE_MAX_DISTANCE") end
 function settings.lockAnimation()      return reticleSection:get("ENABLE_LOCK_ANIMATION") end
 
--- Color accessor — takes a target type string, returns the corresponding color
+-- Color for a target type
 local COLOR_KEYS = {
     none    = "COLOR_NO_TARGET",
     floor   = "COLOR_FLOOR",

@@ -27,12 +27,10 @@ local Targeting = require('scripts.OpenMWHookshot.hookshot_targeting')
 local Physics = require('scripts.OpenMWHookshot.hookshot_physics')
 local Anim = require('scripts.OpenMWHookshot.playerAnim')
 
--- Aliases for util functions (preserves existing call sites)
 local isCarriableItem = U.isCarriableItem
 local isActor = U.isActor
 local isGrabbable = U.isGrabbable
 
--- Convenience alias for debug printing
 local debugPrint = settings.debugPrint
 
 ---@class DubiousHookshotVisualsInterface
@@ -48,14 +46,11 @@ local debugPrint = settings.debugPrint
 ---@field DubiousHookshotVisuals DubiousHookshotVisualsInterface|nil
 ---@field SharedRay HookshotSharedRayInterface|nil
 
--- Shared interfaces table (I.SharedRay, I.Controls, ...)
 local I = require('openmw.interfaces')
 ---@cast I HookshotInterfaces
 
--- Controls interface for movement override (like ladder mod)
 local Controls = I.Controls
 
--- Player type for control switches (preferred over deprecated input.setControlSwitch)
 local Player = types.Player
 
 -- ==============================================
@@ -72,21 +67,15 @@ local LANDING_DURATION = 0.4        -- How long the landing state lasts (physics
 local RAPPEL_LEVITATION_MAGNITUDE = 10   -- Levitation effect magnitude (same as ladder mod)
 local PULL_OFFSET = 50              -- Hardcoded offset for pull target position
 
--- Handoff: the window after the grapple drag releases, during which the
--- player finishes the approach under normal engine movement.
+-- Handoff: engine movement covers the last stretch after the drag releases.
 local HANDOFF_DURATION = 0.6        -- Max length of the handoff window (seconds)
 local HANDOFF_ARRIVAL = 24          -- Horizontal distance to target that ends the window early
 local HANDOFF_GROUND_PROBE = 24     -- Downward probe length used to decide whether a jump would take
 
--- Rappel: how far below the anchor the player's HEAD is allowed to climb.
--- This is measured against the head (position.z + PLAYER_HEIGHT), not the
--- feet - clamping the feet is what let the upper body punch through the
--- surface the hook is embedded in at the top of a climb.
+-- Rappel climb stops with the head this far below the anchor.
 local RAPPEL_HEAD_CLEARANCE = 24
 local PLAYER_HEIGHT = U.PLAYER_HEIGHT
 
--- The hook's outbound flight is visual/gameplay state owned by Hookshot.
--- BeamFX only receives the two endpoints that result from this state.
 local ROPE_PHASE_OUTBOUND = "OUTBOUND"
 local ROPE_PHASE_SELF_PULL = "SELF_PULL"
 local ROPE_PHASE_TARGET_PULL = "TARGET_PULL"
@@ -107,8 +96,7 @@ local HookshotState = {
 
 local state = {
     mode = HookshotState.IDLE,
-    
-    -- Targeting data
+
     targeting = {
         impact = nil,
         range = nil,
@@ -121,14 +109,12 @@ local state = {
         lastRaycastFrame = 0,
         lastTargetType = "none", -- cached reticle color between throttled updates
     },
-    
-    -- Landing state data
+
     landing = {
         timeRemaining = 0,
         targetYaw = nil,
     },
 
-    -- Handoff state data (the last 50-60 units of a non-rappel grapple)
     handoff = {
         timeRemaining = 0,
         direction = nil,      -- Unit vector, horizontal, toward the aim point
@@ -136,14 +122,12 @@ local state = {
         jumpPending = false,  -- One-shot: issue a jump on the first handoff frame
     },
 
-    -- Equipment gates, resolved once per draw/fire rather than per frame.
-    -- See settings.capabilities() for why this isn't polled continuously.
+    -- Resolved on draw and fire, not per frame.
     caps = {
         glove = false,
         itemTargeting = false,
     },
-    
-    -- Hanging state data
+
     hanging = {
         position = nil,
         yaw = nil,
@@ -153,16 +137,13 @@ local state = {
         pitchOverride = 0,
         isMoving = false,
     },
-    
-    -- Item menu state data
+
     itemMenu = {
         item = nil,           -- The item being interacted with
         ragdoll = nil,        -- Reference to the ragdoll data for this item
     },
 
-    -- Runtime-only hook/rope state. Nothing here is authoritative gameplay
-    -- persistence: an in-flight hook is deliberately cancelled by save/load
-    -- or reloadlua, while the BeamFX side self-expires if updates stop.
+    -- Runtime only; save/load cancels an in-flight hook.
     rope = {
         active = false,
         phase = nil,
@@ -181,10 +162,7 @@ local state = {
         travelDuration = 0,
     },
 
-    -- These flags record only engine-side overrides that this script
-    -- currently owns. They are serialized solely so onLoad/reloadlua can
-    -- safely undo an interrupted hookshot without trampling another mod's
-    -- controls.
+    -- Overrides this script owns, saved so onLoad can undo them.
     ownedOverrides = {
         combatControlsSuppressed = false,
         movementControlsOverridden = false,
@@ -192,10 +170,9 @@ local state = {
 }
 
 local frameCounter = 0
+local pendingAnimReset = false
 
--- Forward declarations. Both are assigned after setMode()/the hook action
--- helpers, but updateActiveRope() can safely call them once module loading has
--- completed and engine updates begin.
+-- Forward declarations.
 local abortActiveHook
 local attachTravelingHook
 
@@ -210,9 +187,7 @@ local function finiteNumber(value)
         and value < math.huge
 end
 
--- Convert an arbitrary x/y/z value into a real util.vector3 before using it
--- in gameplay math. This also keeps a malformed optional visual interface
--- from ever breaking the hookshot.
+-- Real vector3 or nil; a malformed visual interface cannot break gameplay.
 local function copyVector3(value)
     if value == nil then return nil end
 
@@ -223,8 +198,7 @@ local function copyVector3(value)
     return util.vector3(x, y, z)
 end
 
--- The rope interface is registered by a later PLAYER entry in the manifest,
--- so it must be acquired lazily rather than cached at module load time.
+-- Acquired lazily: registered by a later manifest entry.
 local function ropeInterfaceMethod(name)
     local visuals = I.DubiousHookshotVisuals
     if visuals == nil then return nil end
@@ -234,22 +208,9 @@ local function ropeInterfaceMethod(name)
     return method
 end
 
--- Right-shoulder launch point for the rope.
---
--- This deliberately does NOT ask the beam interface for its handOrigin()
--- first. The launch point isn't only cosmetic: beginHookTravel() measures
--- the outbound distance from it and divides by hookTravelSpeed to get the
--- flight duration, so sourcing it from an optional visual mod meant hook
--- timing quietly changed depending on whether BeamFX was installed, and
--- changed again if that mod retuned its offset. U.actorShoulderOrigin is
--- the single source of truth; the consumer resolves to the same helper, so
--- the rendered beam still starts exactly where the gameplay says it does.
+-- Rope launch point. Hook timing uses it, so it never comes from the visual mod.
 local function ropeShoulderOrigin()
     return copyVector3(U.actorShoulderOrigin(self))
-        -- Fallback only for a malformed vector, not for a raise. The helper
-        -- reads self's own agent bounds and rotation; if that can fail, the
-        -- hookshot has bigger problems than a rope anchor and the error
-        -- should surface rather than be papered over with a guessed offset.
         or (self.position + util.vector3(0, 0, U.PLAYER_HEIGHT * 0.81))
 end
 
@@ -276,10 +237,6 @@ local function endActiveRope()
     if state.rope.active then
         local endRope = ropeInterfaceMethod("endRope")
         if endRope then
-            -- Called directly. This resolves to THIS MOD's own consumer
-            -- script, not to BeamFX: the cross-mod boundary is downstream in
-            -- beamfx_adapter.lua, which already guards the provider call.
-            -- Wrapping here only hid our own faults a second time.
             endRope()
         end
     end
@@ -302,10 +259,6 @@ end
 local function validObjectPosition(object)
     if object == nil then return nil end
 
-    -- isValid() is the API that exists precisely to answer "can I still
-    -- read this object", and it does not raise. Once it passes, reading
-    -- .position is safe, so neither call needs a guard - the grappled
-    -- target being deleted mid-pull is already handled by the check.
     if not object:isValid() then return nil end
 
     return copyVector3(object.position)
@@ -326,8 +279,7 @@ local function beginHookTravel(spec)
     local approachDir = copyVector3(spec.approachDir)
     if not hitPosition or not approachDir then return false end
 
-    -- A new shot owns the single rope slot. This is idempotent and also
-    -- removes any stale visual left by an interrupted previous shot.
+    -- A new shot owns the single rope slot.
     endActiveRope()
 
     local launchPosition = ropeShoulderOrigin()
@@ -367,10 +319,7 @@ local function updateActiveRope(deltaSeconds)
     local rope = state.rope
     if not rope.active then return end
 
-    -- FIRING owns outbound/attached pulls; HANGING deliberately retains the
-    -- fixed anchor. Every other state should already have retracted via
-    -- setMode(), but this guard keeps the visual fail-safe if a future path
-    -- bypasses that choke point.
+    -- Fail-safe: only FIRING and HANGING keep a rope.
     if state.mode ~= HookshotState.FIRING
         and state.mode ~= HookshotState.HANGING
     then
@@ -381,8 +330,7 @@ local function updateActiveRope(deltaSeconds)
     local anchor = currentRopeAnchor()
     if not anchor then
         if state.mode == HookshotState.HANGING then
-            -- Do not alter hanging gameplay merely because its optional
-            -- visual data became unusable.
+            -- Visual only; hanging continues.
             endActiveRope()
         else
             abortActiveHook("target_unavailable")
@@ -397,9 +345,7 @@ local function updateActiveRope(deltaSeconds)
             progress = math.min(1, rope.travelElapsed / rope.travelDuration)
         end
 
-        -- For item/actor targets, anchor may move during flight. Interpolating
-        -- against its live position preserves a bounded arrival time while
-        -- making the hook visually follow the target rather than miss and snap.
+        -- Follows a moving target's live position.
         rope.tipPosition = rope.launchPosition
             + (anchor - rope.launchPosition) * progress
 
@@ -413,9 +359,6 @@ local function updateActiveRope(deltaSeconds)
         return
     end
 
-    -- Once attached, shrinking is automatic: the near endpoint follows the
-    -- player's hand while this far endpoint stays on the world anchor or live
-    -- pulled object.
     rope.anchorPosition = anchor
     publishRope(anchor)
 end
@@ -423,10 +366,7 @@ end
 -- ==============================================
 -- EQUIPMENT GATES
 -- ==============================================
--- One equipment scan, cached into state.caps and pushed down into the
--- targeting module so the reticle and the fire path agree about what's
--- unlocked. Called on draw and again on fire (the inventory can be opened
--- while drawn, so a stale cache would otherwise last the whole aim).
+-- Called on draw and fire; the inventory can change while drawn.
 local function refreshCapabilities()
     state.caps = settings.capabilities(self)
     Targeting.setCapabilities(state.caps)
@@ -447,17 +387,11 @@ local function setMovementControlsOverridden(overridden)
     state.ownedOverrides.movementControlsOverridden = overridden
 end
 
--- Single choke point for changing state.mode. Every place in this file that
--- used to write state.mode directly now calls setMode() instead, so
--- playerAnim.lua always finds out about a transition (old -> new) and can
--- pick the right full-body animation without this file needing to know
--- anything about animation groups, priorities, or blend masks.
+-- Single choke point for state.mode, so playerAnim sees every transition.
 local function setMode(newMode)
     if state.mode == newMode then return end
 
-    -- The rope survives only while actively firing/pulling or while hanging.
-    -- Keeping this policy at the state-transition choke point makes every
-    -- current and future cancellation/landing/menu/handoff path retract it.
+    -- The rope survives only while FIRING or HANGING.
     if state.rope.active
         and newMode ~= HookshotState.FIRING
         and newMode ~= HookshotState.HANGING
@@ -469,16 +403,7 @@ local function setMode(newMode)
     state.mode = newMode
     Anim.onStateChange(newMode, oldMode, state)
 
-    -- Fire now shares the base game's Attack/Use key (see the 'Use'
-    -- action handler below) rather than having its own dedicated key, so
-    -- normal weapon swings/spellcasting need to be suppressed for the
-    -- whole time the hookshot is drawn/active - otherwise an attack press
-    -- would both fire the hookshot AND trigger whatever's readied.
-    -- HANGING already disables both explicitly on its own (kept as-is,
-    -- since releaseFromHang() re-enables them immediately on release
-    -- rather than waiting for IDLE) - this just extends the same
-    -- suppression to cover DRAWN/FIRING/LANDING too, and guarantees
-    -- restoration at IDLE regardless of which path got there.
+    -- Fire shares the Attack key, so combat is suppressed from DRAWN until IDLE.
     if newMode == HookshotState.DRAWN then
         setCombatControlsSuppressed(true)
     elseif newMode == HookshotState.IDLE then
@@ -503,9 +428,7 @@ end
 -- ==============================================
 -- RETICLE TARGETING LOGIC
 -- ==============================================
--- Cosmetic-only, runs every frame regardless of raycast timing: shows/hides
--- the reticle and advances its lock-on animation. No raycasting happens
--- here - that's driven by the shared ray delivery below.
+-- Reticle visibility and lock-on animation; no raycasting.
 local function updateReticleVisibility(deltaSeconds)
     if state.mode ~= HookshotState.DRAWN then
         Reticle:hide()
@@ -516,9 +439,7 @@ local function updateReticleVisibility(deltaSeconds)
     Reticle:updateAnimation(deltaSeconds)
 end
 
--- Applies a fresh hit (from the shared ray or the grabbable-fallback cone
--- search) to state.targeting and updates the reticle. Runs at most once
--- every RAYCAST_THROTTLE shared-ray deliveries.
+-- Runs at most once per RAYCAST_THROTTLE deliveries.
 local function applyFreshHit(hitObject, hitPos, range)
     state.targeting.impact = {
         hit = true,
@@ -527,10 +448,7 @@ local function applyFreshHit(hitObject, hitPos, range)
     }
     state.targeting.range = range
 
-    -- Probe surface type for world geometry. This stays a dedicated short
-    -- physics ray (nearby.castRay, ~200 units) rather than trusting the
-    -- shared ray's hitNormal, which SharedRay's own docs call unreliable -
-    -- accurate normals matter here for floor/wall/ceiling classification.
+    -- Dedicated physics ray: SharedRay's hitNormal is unreliable.
     local hitNormal = nil
     if not hitObject or not isGrabbable(hitObject) then
         hitNormal = Targeting.probeSurfaceNormal(hitPos, state.targeting.cameraV)
@@ -541,9 +459,6 @@ local function applyFreshHit(hitObject, hitPos, range)
         state.targeting.hitNormal = nil
     end
 
-    -- getTargetType() runs the rappel-clearance/ledge-edge checks (their own
-    -- short physics rays), so this only happens on a throttled tick now,
-    -- not on every single cached-reuse frame in between.
     local targetType = Targeting.getTargetType(
         hitObject,
         state.targeting.surfaceType,
@@ -567,18 +482,13 @@ local function clearHit()
     Reticle:update(false, "none", nil)
 end
 
--- Delivered by I.SharedRay every frame (async, ~1 frame of camera lag) once
--- subscribed in onActive(). `result` is a live view owned by SharedRay and
--- gets mutated again next frame, so any field we want to keep has to be
--- copied out before this function returns - never stash `result` itself.
+-- SharedRay delivery. `result` is a live view; copy fields, never keep it.
 local function onSharedRayResult(result)
     if state.mode ~= HookshotState.DRAWN then return end
 
     frameCounter = frameCounter + 1
 
-    -- Throttle full reclassification (surface probe + rappel/ledge checks).
-    -- Between throttled ticks, just redraw the reticle with the last
-    -- classification instead of recomputing it every frame.
+    -- Full reclassification only every RAYCAST_THROTTLE deliveries.
     if frameCounter - state.targeting.lastRaycastFrame < RAYCAST_THROTTLE then
         if state.targeting.impact then
             Reticle:update(true, state.targeting.lastTargetType, state.targeting.range)
@@ -591,7 +501,6 @@ local function onSharedRayResult(result)
 
     state.targeting.cameraPos, state.targeting.cameraV, state.targeting.cameraYaw, state.targeting.cameraPitch = Targeting.getCameraDirData()
 
-    -- Copy what we need from the live result right away.
     local hit = result.hit
     local hitPos = result.hitPos
     local hitObject = result.hitObject
@@ -600,9 +509,7 @@ local function onSharedRayResult(result)
     if hit and hitPos and distance and distance <= settings.maxRange() then
         local range = distance
 
-        -- FALLBACK: If the ray hit world geometry (not a grabbable), check if
-        -- there's actually an item/actor near where we're aiming that a
-        -- rendering ray can miss (e.g. very thin collision meshes).
+        -- A rendering ray can miss thin items and actors; check the aim cone.
         if not isGrabbable(hitObject) then
             local fallbackTarget, fallbackDist = Targeting.findGrabbableNearAim(
                 state.targeting.cameraPos,
@@ -650,11 +557,7 @@ end
 -- ==============================================
 -- SHARED RAY ACTIVATION
 -- ==============================================
--- Subscribing/parameterizing here (rather than at file scope) matters:
--- multiple mods can bundle their own copy of SharedRay_v2.lua, and only
--- the highest version actually registers itself under I.SharedRay (see
--- that file's own version guard). onActive() runs after that has settled,
--- so I.SharedRay is guaranteed to be the winning copy by the time we touch it.
+-- In onActive, once the winning SharedRay copy is registered.
 local function onActive()
     if not I.SharedRay then
         print("[HOOKSHOT] I.SharedRay interface not found - reticle targeting will not work. Make sure SharedRay_v2.lua is installed alongside this mod.")
@@ -669,21 +572,6 @@ end
 -- ==============================================
 -- RAGDOLL SEQUENCE MANAGEMENT
 -- ==============================================
-local function dropObject(ragdoll)
-    if not ragdoll or not ragdoll.target then return end
-
-    -- Clear old sequences to prevent conflicts
-    ragdoll.seqs = {}
-
-    -- Use physics drop for everything (items and actors)
-    Physics.addRagdoll(Physics.createRagdollData(
-        ragdoll.target,
-        ragdoll.boundingData,
-        { Physics.createDropSequence() },
-        { isFalling = true }
-    ))
-end
-
 local function terminateHook(ragdoll)
     if not ragdoll then return end
 
@@ -695,15 +583,13 @@ end
 -- Forward declaration for menu callback handler
 local handleItemMenuAction
 
--- Forward declaration: defined with the other state updates below, but
--- called from handleSequenceCompletion above it.
+-- Forward declaration.
 local beginHandoff
 
 -- ==============================================
 -- SEQUENCE COMPLETION HANDLER
 -- ==============================================
--- Processes completion events returned by Physics.update().
--- Handles state transitions; physics bookkeeping is done by the physics module.
+-- Turns Physics.update() completion events into state transitions.
 local function handleSequenceCompletion(event)
     local ragdoll = event.ragdoll
 
@@ -755,8 +641,7 @@ local function handleSequenceCompletion(event)
                     state.rope.targetOffset = nil
                     state.rope.pullsTarget = false
                 end
-                -- Fields above are set before setMode() so playerAnim.lua sees
-                -- a clean isMoving=false hang pose the instant HANGING starts.
+                -- Set before setMode so the first hang pose is idle.
                 setMode(HookshotState.HANGING)
 
                 local activeEffects = types.Actor.activeEffects(self)
@@ -775,8 +660,7 @@ local function handleSequenceCompletion(event)
                 ui.showMessage("W to ascend, S to descend, Space to drop")
             end
         elseif event.handoff then
-            -- Clean release short of the aim point: cover the rest with a
-            -- jump plus normal air movement instead of more teleporting.
+            -- Released short of the aim point: finish with engine movement.
             beginHandoff(event.handoff, landingData)
         else
             debugPrint("Entering LANDING state")
@@ -789,8 +673,7 @@ local function handleSequenceCompletion(event)
 
     elseif event.type == "SEQUENCE_COMPLETE" then
         terminateHook(ragdoll)
-        -- Actor pulls use the generic completion event. Do not leave their
-        -- rope visible for the bookkeeping frame before ALL_COMPLETE arrives.
+        -- Actor pulls: drop the rope before ALL_COMPLETE.
         endActiveRope()
 
     elseif event.type == "ALL_COMPLETE" then
@@ -808,11 +691,10 @@ end
 -- ==============================================
 handleItemMenuAction = function(action, ragdoll)
     debugPrint("Item menu action:", action)
-    
+
     local item = state.itemMenu.item
-    
+
     if action == 'take' then
-        -- Just take the item into inventory
         if item and item:isValid() then
             core.sendGlobalEvent('HookshotInventoryAction', {
                 action = 'take',
@@ -820,25 +702,12 @@ handleItemMenuAction = function(action, ragdoll)
                 actor = self
             })
         end
-        -- Remove from ragdoll system
         Physics.removeByTarget(item)
         setMode(HookshotState.IDLE)
 
     else
-        -- 'drop', 'cancel', and any unknown action all mean: let it fall.
-        --
-        -- [BUGFIX] setMode(FIRING) used to be unconditional while the sequence
-        -- was guarded. FIRING is only ever left again when
-        -- ITEM_DROP_COMPLETE arrives, and that event only exists if the drop
-        -- sequence was really queued on a tracked ragdoll. If the ragdoll had
-        -- been dropped from the physics registry while the menu was open --
-        -- timeout, cell change, any removeByTarget -- the sequence went onto
-        -- an orphaned table, no event ever came, and the FIRING pose looped
-        -- until reload.
-        --
-        -- So FIRING is now entered only when something can take us out of it.
-        -- Otherwise go straight to IDLE, which releases the pose via
-        -- Anim.onStateChange -> stopAnim().
+        -- Anything but take: let it fall. FIRING only if a drop was really queued,
+        -- since only its completion event leaves FIRING.
         local dropping = ragdoll and Physics.addSequence(ragdoll, Physics.createDropSequence())
         if dropping then
             setMode(HookshotState.FIRING)  -- monitor the drop
@@ -847,8 +716,7 @@ handleItemMenuAction = function(action, ragdoll)
             setMode(HookshotState.IDLE)
         end
     end
-    
-    -- Clear menu state
+
     state.itemMenu.item = nil
     state.itemMenu.ragdoll = nil
 end
@@ -856,20 +724,19 @@ end
 -- ==============================================
 -- LANDING AND HANGING STATE UPDATES
 -- ==============================================
--- Forward declaration (releaseFromHang is defined later but called from updateHangingState)
+-- Forward declaration.
 local releaseFromHang
 
 local function updateLandingState(deltaSeconds)
     if state.mode ~= HookshotState.LANDING then return end
-    
-    -- During landing, suppress player movement to let physics settle
-    -- This prevents fighting between player input and physics engine
+
+    -- Suppress input while teleport physics settles.
     self.controls.movement = 0
     self.controls.sideMovement = 0
     self.controls.jump = false
-    
+
     state.landing.timeRemaining = state.landing.timeRemaining - deltaSeconds
-    
+
     if state.landing.timeRemaining <= 0 then
         debugPrint("Landing state complete, returning to IDLE")
         setMode(HookshotState.IDLE)
@@ -881,40 +748,24 @@ end
 -- ==============================================
 -- GRAPPLE HANDOFF
 -- ==============================================
--- The drag stops 50-60 units short of the aim point (which itself sits
--- 50-60 units above the surface). The remainder is covered by the engine:
--- a jump if the player is standing on something, gravity plus air steering
--- if they're already airborne.
---
--- WHY NOT JUST TELEPORT THE LAST BIT: there is no Lua call to set an
--- actor's velocity in OpenMW, so a teleported approach arrives with zero
--- engine momentum and has to be stopped by the collision cage right at
--- the destination - which is exactly where the cage is most likely to
--- shove the player into or through the surface. Releasing early means the
--- final approach is ordinary engine movement that other movement mods can
--- see and react to.
---
--- handoffVector is world-space target-minus-position at release time.
+-- The drag releases short of the aim point and engine movement finishes it.
+-- See README. handoffVector: world-space target minus position.
 beginHandoff = function(handoffVector, landingData)
     local aimPos = (landingData and landingData.groundPosition) or (self.position + handoffVector)
 
-    -- Steer horizontally only. The vertical component is gravity's job -
-    -- feeding it into controls.movement would just fight the engine.
+    -- Horizontal only; vertical is gravity's.
     local flat = util.vector3(handoffVector.x, handoffVector.y, 0)
     local flatLen = flat:length()
     if flatLen > 0.01 then
         state.handoff.direction = flat:normalize()
     else
-        -- Straight up or straight down: nothing to steer toward, so just
-        -- hold still and let gravity resolve it.
         state.handoff.direction = nil
     end
 
     state.handoff.targetPos = aimPos
     state.handoff.timeRemaining = HANDOFF_DURATION
 
-    -- A jump only takes if the engine thinks we're grounded. Probe once
-    -- rather than writing controls.jump blindly every frame.
+    -- Jump only if grounded.
     local groundProbe = nearby.castRay(
         self.position + util.vector3(0, 0, 8),
         self.position - util.vector3(0, 0, HANDOFF_GROUND_PROBE),
@@ -932,10 +783,7 @@ local function endHandoff()
     state.handoff.direction = nil
     state.handoff.targetPos = nil
     state.handoff.jumpPending = false
-    -- Straight to IDLE, NOT through LANDING: LANDING exists to zero out
-    -- movement so teleport-driven physics can settle, which is the exact
-    -- opposite of what a handoff wants. Suppressing input here would kill
-    -- the momentum we just spent the handoff building.
+    -- Straight to IDLE: LANDING would zero the momentum.
     setMode(HookshotState.IDLE)
 end
 
@@ -949,10 +797,7 @@ local function updateHandoffState(deltaSeconds)
 
     local dir = state.handoff.direction
     if dir then
-        -- controls.movement/sideMovement are in the ACTOR's frame, but the
-        -- direction we want is in world space, so rotate it by the actor's
-        -- yaw. Doing this instead of forcing the player to face the target
-        -- keeps the camera completely free during the approach.
+        -- World direction into the actor's frame; the camera stays free.
         local yaw = self.rotation:getYaw()
         local sinYaw, cosYaw = math.sin(yaw), math.cos(yaw)
         self.controls.movement = dir.x * sinYaw + dir.y * cosYaw
@@ -960,9 +805,7 @@ local function updateHandoffState(deltaSeconds)
         self.controls.run = true
     end
 
-    -- End early once we're over the target horizontally, so the player
-    -- gets their controls back the moment the grapple has done its job
-    -- rather than at a fixed timer.
+    -- Ends early once over the target.
     if state.handoff.targetPos then
         local toTarget = state.handoff.targetPos - self.position
         local flatDist = util.vector3(toTarget.x, toTarget.y, 0):length()
@@ -985,67 +828,54 @@ local jumpPressedForRappel = false
 
 local function updateHangingState(deltaSeconds)
     if state.mode ~= HookshotState.HANGING then return end
-    
-    -- Rappel controls: Check both built-in actions AND custom actions
-    -- Built-in: MoveForward/MoveBackward are Range actions (W/S keys)
-    -- Custom: HookshotRappelUp/Down/Release are Boolean actions
+
+    -- W/S range actions, or the custom boolean actions.
     local moveUpBuiltin = input.getRangeActionValue('MoveForward') > 0
     local moveDownBuiltin = input.getRangeActionValue('MoveBackward') > 0
     local moveUpCustom = input.getBooleanActionValue('HookshotRappelUp')
     local moveDownCustom = input.getBooleanActionValue('HookshotRappelDown')
     local releaseCustom = input.getBooleanActionValue('HookshotRappelRelease')
-    
+
     local moveUp = moveUpBuiltin or moveUpCustom
     local moveDown = moveDownBuiltin or moveDownCustom
-    
-    -- Release: Jump trigger OR custom rappel release action
+
     local releasePressed = jumpPressedForRappel or releaseCustom
-    
-    -- Explicit debugMode() guard, not just debugPrint(...) - string.format
-    -- plus these two extra getRangeActionValue() calls would otherwise run
-    -- every single frame while hanging even with debug mode off, since Lua
-    -- evaluates a function's arguments before the function (debugPrint)
-    -- gets a chance to discard them.
+
+    -- Guarded: the arguments are built even when debug is off.
     if settings.debugMode() then
         debugPrint(string.format("RAPPEL Up=%s Down=%s Release=%s (builtinUp=%.1f builtinDown=%.1f customUp=%s customDown=%s)",
             tostring(moveUp), tostring(moveDown), tostring(releasePressed),
             input.getRangeActionValue('MoveForward'), input.getRangeActionValue('MoveBackward'),
             tostring(moveUpCustom), tostring(moveDownCustom)))
     end
-    
-    -- Check for release action
+
     if releasePressed then
         jumpPressedForRappel = false  -- Reset the Jump trigger flag
         debugPrint("Release detected in updateHangingState - releasing from hang")
         releaseFromHang()
         return
     end
-    
+
     self.controls.sideMovement = 0
     self.controls.movement = 0
-    
+
     local currentPos = self.position
     local anchorPos = state.hanging.anchorPosition
     if not anchorPos then
         debugPrint("ERROR: No anchor position in hanging state")
         return
     end
-    
+
     local currentRopeLength = (anchorPos - currentPos):length()
     state.hanging.currentRopeLength = currentRopeLength
-    
+
     if moveUp then
         debugPrint("moveUp detected, attempting to ascend")
-        -- Animation follows the key being held, independent of whether the
-        -- climb is actually blocked below.
+        -- Pose follows the key, even when blocked.
         state.hanging.pitchOverride = -1.0
         state.hanging.isMoving = true
 
-        -- APEX CLIPPING FIX. The old limit was on the player's FEET
-        -- (playerZ >= anchorZ - 64), which let the head - 128 units above
-        -- the feet - climb 64 units PAST the anchor and into the surface
-        -- the hook is embedded in. Clamping the head instead costs nothing
-        -- and removes the penetration entirely.
+        -- Clamp the head, not the feet, against the anchor.
         local playerZ = currentPos.z
         local anchorZ = anchorPos.z
         local headZ = playerZ + PLAYER_HEIGHT
@@ -1056,10 +886,7 @@ local function updateHangingState(deltaSeconds)
         else
             local step = math.min(settings.rappelClimbSpeed() * deltaSeconds, maxStep)
 
-            -- Second guard, for geometry that ISN'T the anchor: an overhang,
-            -- a beam, the lip of the ledge you're climbing past. One ray per
-            -- ascending frame, mirroring the groundCheck the descend branch
-            -- already does.
+            -- Headroom for geometry other than the anchor.
             local headroom = nearby.castRay(
                 currentPos + util.vector3(0, 0, PLAYER_HEIGHT * 0.5),
                 currentPos + util.vector3(0, 0, PLAYER_HEIGHT + step + RAPPEL_HEAD_CLEARANCE),
@@ -1070,8 +897,6 @@ local function updateHangingState(deltaSeconds)
             )
 
             if headroom.hit then
-                -- Stop with the head RAPPEL_HEAD_CLEARANCE below whatever
-                -- we found, never past it.
                 local allowed = (headroom.hitPos.z - RAPPEL_HEAD_CLEARANCE) - headZ
                 step = math.min(step, math.max(allowed, 0))
                 debugPrint("Headroom limited ascent, step =", step)
@@ -1080,22 +905,14 @@ local function updateHangingState(deltaSeconds)
             if step <= 0 then
                 debugPrint("Blocked overhead, cannot ascend further")
             else
-                -- Move straight up by position, not by faking a look-up-and-walk-
-                -- forward direction - this keeps the camera 100% free while
-                -- climbing, since self.controls.pitchChange/yawChange are never
-                -- touched here.
                 local newPos = currentPos + util.vector3(0, 0, step)
-                -- self.object, not self: `self` is the SelfObject, a distinct
-                -- type from the GObject an event payload should carry. The
-                -- global handler calls :isValid() and :teleport() on it.
                 core.sendGlobalEvent('ragdollTeleport', { object = self.object, newPos = newPos })
                 debugPrint("Ascending, step =", step)
             end
         end
-        
+
     elseif moveDown then
         debugPrint("moveDown detected, attempting to descend")
-        -- Same idea: animation tracks the key, not whether descent is blocked.
         state.hanging.pitchOverride = 1.0
         state.hanging.isMoving = true
 
@@ -1110,7 +927,7 @@ local function updateHangingState(deltaSeconds)
                     ignore = self
                 }
             )
-            
+
             if groundCheck.hit and (currentPos.z - groundCheck.hitPos.z) < 50 then
                 debugPrint("Near ground, cannot descend further")
             else
@@ -1124,15 +941,13 @@ local function updateHangingState(deltaSeconds)
                 debugPrint("Descending, step =", step)
             end
         end
-        
+
     else
         state.hanging.pitchOverride = 0
         state.hanging.isMoving = false
     end
 
-    -- Refresh the hang pose (idle/up/down) every frame - it's driven by
-    -- moveUp/moveDown (the raw key state) above, not by a HookshotState
-    -- transition, so this can't live in setMode().
+    -- Per frame: the hang pose follows the keys, not a mode change.
     Anim.updateHanging(state.hanging)
 end
 
@@ -1147,28 +962,27 @@ local function clearHangingLevitation()
     end
 end
 
--- Assign to forward-declared variable
 releaseFromHang = function()
     if state.mode ~= HookshotState.HANGING then return end
-    
+
     debugPrint("Releasing from hang")
-    
+
     clearHangingLevitation()
     setMovementControlsOverridden(false)
-    
+
     setCombatControlsSuppressed(false)
-    
+
     setMode(HookshotState.LANDING)
     state.landing.timeRemaining = LANDING_DURATION
     state.landing.targetYaw = state.hanging.yaw
-    
+
     state.hanging.position = nil
     state.hanging.yaw = nil
     state.hanging.anchorPosition = nil
     state.hanging.currentRopeLength = 0
     state.hanging.pitchOverride = 0
     state.hanging.isMoving = false
-    
+
     ambient.playSoundFile(settings.sounds.toggle)
 end
 
@@ -1177,7 +991,11 @@ end
 -- ON_UPDATE LOGIC
 -- ==============================================
 local function onUpdate(deltaSeconds)
-    -- Run physics and process completion events
+    if pendingAnimReset then
+        pendingAnimReset = false
+        if state.mode == HookshotState.IDLE then Anim.forceReset() end
+    end
+
     local isPaused = state.mode == HookshotState.ITEM_MENU
     local events = Physics.update(deltaSeconds, isPaused)
     for _, event in ipairs(events) do
@@ -1192,9 +1010,7 @@ local function onUpdate(deltaSeconds)
 end
 
 local function onSave()
-    -- The hook itself is deliberately not persisted. Save only enough
-    -- ownership data to undo engine-side changes if the save/reload happened
-    -- in the middle of a draw, pull, or hang.
+    -- The hook is not persisted; only what onLoad needs to undo overrides.
     return {
         version = 1,
         combatControlsSuppressed = state.ownedOverrides.combatControlsSuppressed,
@@ -1208,9 +1024,7 @@ end
 local function onLoad(savedData)
     local saved = type(savedData) == "table" and savedData or {}
 
-    -- Include the live flags as well as the serialized flags. That keeps this
-    -- cleanup correct whether OpenMW recreated the Lua module or invoked
-    -- onLoad on an existing instance (for example during development reloads).
+    -- Live flags too, in case onLoad runs on an existing instance.
     local restoreCombatControls = saved.combatControlsSuppressed == true
         or state.ownedOverrides.combatControlsSuppressed
     local restoreMovementControls = saved.movementControlsOverridden == true
@@ -1237,11 +1051,8 @@ local function onLoad(savedData)
         setCombatControlsSuppressed(false)
     end
 
-    -- Cancel held poses and all local transient state without emitting an end
-    -- event during load. The global BeamFX adapter resets independently.
-    if resetAnimation then
-        Anim.forceReset()
-    end
+    -- Deferred: the animation object may not exist while loading.
+    pendingAnimReset = pendingAnimReset or resetAnimation
     state.mode = HookshotState.IDLE
     state.ownedOverrides.combatControlsSuppressed = false
     state.ownedOverrides.movementControlsOverridden = false
@@ -1253,8 +1064,7 @@ local function onLoad(savedData)
     state.hanging.isMoving = false
     Reticle:hide()
     if restoreCrosshair then
-        -- A recreated Reticle module has no UI element for hide() to update,
-        -- but the engine-side crosshair can still be hidden by the old one.
+        -- A recreated Reticle cannot unhide the old crosshair itself.
         camera.showCrosshair(true)
     end
     clearRopeState()
@@ -1267,7 +1077,7 @@ local function pullHookedObject(target, dirVector)
     if not target or not dirVector or not validObjectPosition(target) then
         return false
     end
-    
+
     Physics.removeByTarget(target)
 
     local camZ = camera.getPosition().z
@@ -1279,7 +1089,6 @@ local function pullHookedObject(target, dirVector)
         targetZ
     ) + dirVector * PULL_OFFSET
 
-    -- Check if this is an item that will need the menu after pull
     local isItem = isCarriableItem(target)
     debugPrint("Pulling object:", target.recordId, "isItem:", tostring(isItem))
 
@@ -1293,22 +1102,17 @@ end
 
 local function hookToWorldObject(hitPos, hitNormal, approachDir, playerYaw, cameraPos, cameraPitch)
     if not hitPos or not hitNormal or not approachDir then return false end
-    
-    -- Classify the surface type for ledge edge check
+
     local surfaceType = orient.classifySurface(hitNormal)
-    
-    -- Check if this is a rappel-eligible surface (for fun mode)
-    -- Must pass BOTH checks: clearance AND ledge edge detection
+
+    -- Rappel needs clearance AND a ledge edge.
     local rappelEligible = Targeting.checkRappelClearance(hitPos, hitNormal)
                            and Targeting.checkLedgeEdge(hitPos, hitNormal, cameraPos, cameraPitch, surfaceType)
-    
+
     local landingData = orient.calculateLanding(hitPos, hitNormal, approachDir, playerYaw, rappelEligible)
     landingData.anchorPosition = hitPos
 
-    -- Non-rappel grapples arc in ABOVE the landing point and release short
-    -- of it. A hang has to actually arrive at its hang position (the whole
-    -- state depends on being within arrivalThreshold of it), so rappel
-    -- targets keep the old drag-all-the-way behaviour.
+    -- Non-rappel grapples aim above the landing and release short; a hang must arrive.
     local handoffDistance = 0
     if not landingData.isHang then
         local rise = settings.handoffRise()
@@ -1316,12 +1120,10 @@ local function hookToWorldObject(hitPos, hitNormal, approachDir, playerYaw, came
             landingData.position = landingData.position + util.vector3(0, 0, rise)
         end
         handoffDistance = settings.handoffDistance()
-        -- Remember the un-raised point so the handoff can steer at the
-        -- surface rather than at the empty air above it.
         landingData.groundPosition = landingData.position - util.vector3(0, 0, rise)
     end
 
-    debugPrint("Hook to world:", 
+    debugPrint("Hook to world:",
         "surface =", landingData.surfaceType,
         "isHang =", tostring(landingData.isHang),
         "isRappelPoint =", tostring(landingData.isRappelPoint),
@@ -1329,7 +1131,7 @@ local function hookToWorldObject(hitPos, hitNormal, approachDir, playerYaw, came
         "handoff =", handoffDistance,
         "offset from hit =", (landingData.position - hitPos):length()
     )
-    
+
     Physics.addRagdoll(Physics.createRagdollData(
         self,
         Physics.getBoundingData(self),
@@ -1338,9 +1140,7 @@ local function hookToWorldObject(hitPos, hitNormal, approachDir, playerYaw, came
     return true
 end
 
--- The outbound phase calls this exactly once when its virtual tip reaches the
--- target. Only now do we start the pre-existing pull physics, making the
--- visible extension and reel-in two distinct phases.
+-- Called once when the outbound tip arrives; pull physics starts here.
 attachTravelingHook = function(anchor)
     local rope = state.rope
     if not rope.active or rope.phase ~= ROPE_PHASE_OUTBOUND then return end
@@ -1389,7 +1189,7 @@ local function drawHookshot()
     debugPrint("=== drawHookshot called ===")
     ambient.playSoundFile(settings.sounds.toggle)
     ambient.playSoundFile(settings.sounds.set)
-    
+
     setMode(HookshotState.DRAWN)
     debugPrint("State changed to DRAWN")
 end
@@ -1397,7 +1197,7 @@ end
 local function deactivateHookshotDrawnState()
     debugPrint("=== deactivateHookshotDrawnState called ===")
     Reticle:hide()
-    
+
     setMode(HookshotState.IDLE)
     debugPrint("State changed to IDLE")
 end
@@ -1405,24 +1205,26 @@ end
 local function fireHookshot()
     debugPrint("=== fireHookshot called ===")
 
-    -- EVERY denial path returns before the first playSoundFile() below.
-    -- Sound is feedback for something HAPPENING; a refused fire should be
-    -- silent (or get its own distinct cue), not borrow the arm/aim sound.
+    -- Every refusal returns before any sound.
     if not state.targeting.impact then
         ui.showMessage("No target in hookshot range")
         debugPrint("No target - aborting fire")
         return
     end
-    
+
     local target = state.targeting.impact.hitObject
     local hitPos = state.targeting.impact.hitPos
     local approachDir = state.targeting.cameraV
     local playerYaw = state.targeting.cameraYaw or camera.getYaw()
 
-    -- Re-resolve the gates here rather than trusting the value cached at
-    -- draw time: the inventory can be opened and an item unequipped while
-    -- the hookshot is still drawn.
+    -- Re-resolved: the inventory can change while drawn.
     local caps = refreshCapabilities()
+
+    if not caps.glove then
+        ui.showMessage("You need to equip a hookshot")
+        deactivateHookshotDrawnState()
+        return
+    end
 
     if isCarriableItem(target) and not caps.itemTargeting then
         ui.showMessage("Your hookshot can't draw items to you")
@@ -1459,8 +1261,6 @@ local function fireHookshot()
     ambient.playSoundFile(settings.sounds.fire)
     ambient.playSoundFile(settings.sounds.target)
 
-    -- Direct DRAWN -> FIRING transition: the old helper passed through IDLE,
-    -- briefly stopping the pose and re-enabling combat controls for the pull.
     Reticle:hide()
     setMode(HookshotState.FIRING)
     debugPrint("State changed to FIRING (outbound)")
@@ -1475,15 +1275,11 @@ end
 
 local function tryActivateHookshot()
     debugPrint("=== tryActivateHookshot called, current mode =", state.mode)
-    
+
     if state.mode == HookshotState.DRAWN then
         debugPrint("Mode is DRAWN - sheathing hookshot")
         trySheathHookshot()
     elseif state.mode == HookshotState.IDLE then
-        -- Gate check BEFORE any audio. drawHookshot() owns the arm/aim
-        -- sounds, so returning here leaves the denial silent apart from the
-        -- on-screen message - the sound now only ever means "the hookshot
-        -- actually came up".
         local caps = refreshCapabilities()
         if not caps.glove then
             debugPrint("Mode is IDLE - hookshot not equipped, ignoring activation")
@@ -1505,42 +1301,25 @@ end
 -- ==============================================
 -- INPUT HANDLERS (Trigger System)
 -- ==============================================
--- All keybindings are handled via triggers registered with inputBinding settings
--- This allows users to rebind keys through OpenMW's Lua Scripts menu
 
-print("[HOOKSHOT] Registering trigger handlers...")
-
--- Hookshot activate trigger handler
 input.registerTriggerHandler('HookshotActivate', async:callback(function()
     debugPrint("HookshotActivate trigger FIRED!")
     tryActivateHookshot()
 end))
-print("[HOOKSHOT] Registered handler for HookshotActivate")
 
--- Hookshot sheath trigger handler
 input.registerTriggerHandler('HookshotSheath', async:callback(function()
     debugPrint("HookshotSheath trigger FIRED!")
     trySheathHookshot()
 end))
-print("[HOOKSHOT] Registered handler for HookshotSheath")
 
--- Fire: shares the base game's Attack/Use key instead of a dedicated
--- binding. registerActionHandler calls back only when the value CHANGES,
--- so this fires once per press (not continuously while the button is
--- held) - same feel as the old single-key draw-then-fire toggle, just on
--- a different key. Only acts while DRAWN; setMode() disables the
--- Fighting/Magic control switches for that whole window so this can't
--- also trigger a normal weapon swing or spell.
+-- Fire on the Attack/Use action; called on change, so once per press.
 input.registerActionHandler('Use', async:callback(function(value)
     if value and state.mode == HookshotState.DRAWN then
         debugPrint("Use (Attack) pressed while DRAWN - firing hookshot")
         fireHookshot()
     end
 end))
-print("[HOOKSHOT] Registered handler for Use (Fire)")
 
--- Note: Rappel Up/Down/Release are now Boolean Actions, not Triggers
--- They are read directly via getBooleanActionValue in updateHangingState
 
 -- Jump trigger handler for hang release (Space to drop - built-in fallback)
 input.registerTriggerHandler('Jump', async:callback(function()
@@ -1550,17 +1329,22 @@ input.registerTriggerHandler('Jump', async:callback(function()
     end
 end))
 
-print("[HOOKSHOT] All trigger handlers registered")
+-- Esc or another menu leaves the item menu's Interface mode without a click.
+local function onUiModeChanged(data)
+    if state.mode ~= HookshotState.ITEM_MENU then return end
+    if data.newMode ~= 'Interface' and hookshotMenu.isOpen() then
+        hookshotMenu.cancel()
+    end
+end
 
--- ==============================================
--- MODULE EXPORTS
--- ==============================================
 return {
     engineHandlers = {
         onActive = onActive,
         onUpdate = onUpdate,
         onLoad = onLoad,
         onSave = onSave,
-        -- No longer need onKeyPress/onKeyRelease - all handled via triggers
-    }
+    },
+    eventHandlers = {
+        UiModeChanged = onUiModeChanged,
+    },
 }

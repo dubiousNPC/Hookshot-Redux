@@ -1,13 +1,7 @@
 ---@omw-context player
 
---[[
-    hookshot_physics.lua
-    Ragdoll sequences, bounding boxes, collision detection, and physics tick loop.
-
-    Owns the ragdoll data array and all movement simulation. The update function
-    returns completion events instead of directly triggering state transitions —
-    player.lua handles those via handleSequenceCompletion.
-]]--
+-- Ragdoll sequences, bounding boxes, collision and the physics tick.
+-- update() returns completion events; player.lua handles transitions.
 
 local core = require('openmw.core')
 local nearby = require('openmw.nearby')
@@ -28,7 +22,6 @@ local Physics = {}
 -- COLLISION MASKS
 -- ==============================================
 local ANY_PHY = nearby.COLLISION_TYPE.AnyPhysical
--- Hookshot collision mask: exclude water so hookshot works while swimming
 local HOOKSHOT_PHY = nearby.COLLISION_TYPE.World
                    + nearby.COLLISION_TYPE.Door
                    + nearby.COLLISION_TYPE.HeightMap
@@ -39,16 +32,10 @@ local HOOKSHOT_PHY = nearby.COLLISION_TYPE.World
 -- ==============================================
 local ITEM_Z_OFFSET = 0             -- Items can be very flat; minimal offset like RT
 local BUMP_OFFSET = 25              -- Offset to prevent teleports from pushing objects through wall / floor
-local ARRIVAL_RADIUS = 50           -- How close to targetP counts as "arrived" and ends the sequence.
-                                    -- Deliberately separate from BUMP_OFFSET: that one is a COLLISION
-                                    -- standoff, this one is an ARRIVAL test. They were the same constant,
-                                    -- so tuning either silently retuned the other.
-local DECEL_DISTANCE = 250          -- Start easing the pull down inside this distance from targetP
-local DECEL_MIN_FACTOR = 0.25       -- Never ease below this fraction of the configured Pull Speed
-local DECEL_MIN_SPEED = 300         -- ...nor below this absolute speed. NOTE: this floor is not cosmetic -
-                                    -- STUCK_DIST_THRESHOLD/PREV_POS_UPDATE_DT below means anything slower
-                                    -- than 100 units/sec reads as "stuck" and would terminate the sequence
-                                    -- through the wrong branch. 300 keeps a 3x margin over that.
+local ARRIVAL_RADIUS = 50           -- arrival test; separate from the BUMP_OFFSET collision standoff
+local DECEL_DISTANCE = 250          -- ease the pull down inside this distance
+local DECEL_MIN_FACTOR = 0.25       -- never below this fraction of Pull Speed
+local DECEL_MIN_SPEED = 300         -- nor below this; under ~100 u/s reads as stuck
 local STUCK_DIST_THRESHOLD = 5      -- Object has to move more than this distance per tick or sequence ends
 local STUCK_COUNT_THRESHOLD = 3     -- Number of frames the object has been stuck before stopping ragdoll
 local MAX_TIMEOUT = 2               -- Maximum ragdoll duration (seconds) for fail-safe purposes
@@ -84,12 +71,8 @@ function Physics.createPullSequence(targetPos, speed, timeout, isItemPull)
     }
 end
 
--- handoffDistance: if > 0, the drag ENDS this many units short of targetP
--- instead of driving all the way in, and the completion event carries a
--- `handoff` vector (target minus current position, world space) so the
--- caller can cover the remainder with engine movement. Pass 0/nil for the
--- old drag-all-the-way behaviour - rappel sequences do exactly that, since
--- a hang has to actually arrive at its hang position.
+-- handoffDistance > 0: end this far short and report a handoff vector.
+-- Rappel passes 0: a hang must arrive.
 function Physics.createSelfPullSequence(targetPos, speed, timeout, landingData, handoffDistance)
     return {
         type = "SELF_PULL",
@@ -142,19 +125,8 @@ function Physics.removeByTarget(target)
     end)
 end
 
--- Returns true only if the sequence was actually queued on a ragdoll this
--- system is still stepping.
---
--- [BUGFIX] This used to insert unconditionally. removeByTarget() compacts an
--- entry out of ragDollData but the ragdoll TABLE stays alive wherever it was
--- captured -- notably in the item menu's closure, which holds it for as long
--- as the menu is open. Adding a sequence to that orphan silently succeeded,
--- update() never walked it, completeCurrentSequence() never ran, and the
--- ITEM_DROP_COMPLETE event that returns the player to IDLE never fired. The
--- FIRING pose is played with forceLoop, so it looped until the next reload.
---
--- Callers must act on the result: a queued sequence is a promise that a
--- completion event will arrive, and that promise cannot be kept here.
+-- True only if queued on a ragdoll still being stepped. A queued sequence
+-- promises a completion event; callers must act on false.
 function Physics.addSequence(ragdoll, sequence)
     if not ragdoll or not ragdoll.seqs then return false end
 
@@ -317,8 +289,7 @@ end
 -- ==============================================
 -- SEQUENCE COMPLETION (bookkeeping only)
 -- ==============================================
--- Removes the current sequence and resets bookkeeping fields.
--- Returns an event descriptor for player.lua to handle state transitions.
+-- Pops the current sequence; returns the event for player.lua.
 local function completeCurrentSequence(ragdoll)
     if not ragdoll or not ragdoll.seqs then return nil end
 
@@ -327,7 +298,6 @@ local function completeCurrentSequence(ragdoll)
 
     debugPrint("Completing sequence, remaining:", #ragdoll.seqs - 1)
 
-    -- Determine event type based on sequence
     local event
 
     if currentSeq.type == "PULL" and currentSeq.isItemPull then
@@ -335,10 +305,7 @@ local function completeCurrentSequence(ragdoll)
     elseif currentSeq.type == "DROP" and ragdoll.target ~= self then
         event = { type = "ITEM_DROP_COMPLETE", ragdoll = ragdoll }
     elseif currentSeq.type == "SELF_PULL" and currentSeq.landingData then
-        -- handoffVector is only ever set on the proximity-exit branch in
-        -- update(). A sequence that ended because it timed out, got stuck,
-        -- or hit something leaves it nil, so a BLOCKED grapple can never be
-        -- mistaken for a clean release and given free momentum.
+        -- handoff is set only on a clean proximity exit, never on a block.
         event = {
             type = "SELF_PULL_COMPLETE",
             ragdoll = ragdoll,
@@ -349,7 +316,6 @@ local function completeCurrentSequence(ragdoll)
         event = { type = "SEQUENCE_COMPLETE", ragdoll = ragdoll }
     end
 
-    -- Bookkeeping: remove sequence and reset init state
     table.remove(ragdoll.seqs)
     ragdoll.seqInit = false
     ragdoll.bufferPosition = nil
@@ -360,8 +326,7 @@ end
 -- ==============================================
 -- MAIN UPDATE LOOP
 -- ==============================================
--- Returns a list of completion events for player.lua to process.
--- isPaused should be true when item menu is open.
+-- Returns completion events. isPaused while the item menu is open.
 function Physics.update(deltaSeconds, isPaused)
     local events = {}
 
@@ -438,33 +403,17 @@ function Physics.update(deltaSeconds, isPaused)
             movementV = s.targetP - objectPosition
             local currDist = movementV:length()
 
-            -- Ease-out on approach (the "needs some lerp" part). Constant
-            -- speed straight into a hard stop is what makes the end of a
-            -- pull read as a snap; ramping down over the last DECEL_DISTANCE
-            -- units lands it instead. Floored twice - once as a fraction of
-            -- the configured speed, once absolutely - so a slow Pull Speed
-            -- setting can't ease down into the stuck-detector's range.
+            -- Ease out over DECEL_DISTANCE, floored so it never reads as stuck.
             local speed = s.spd
             if currDist < DECEL_DISTANCE then
                 speed = s.spd * math.max(DECEL_MIN_FACTOR, currDist / DECEL_DISTANCE)
                 speed = math.max(speed, math.min(DECEL_MIN_SPEED, s.spd))
             end
 
-            -- The arrival radius has to be at least one frame's travel, or the
-            -- check can be stepped clean over: the object jumps from just
-            -- outside the radius to just outside it on the FAR side, never
-            -- landing inside, and then ping-pongs around the target until the
-            -- stuck-detector times it out ~200ms later. That dead zone opens up
-            -- whenever step > 2 * ARRIVAL_RADIUS - i.e. at high Pull Speed
-            -- settings, or at ordinary speed on a low/uneven framerate, which
-            -- is exactly the "few jagged frames at the end of the pull" this
-            -- fixes. Derived from the EASED speed, not the nominal one, so it
-            -- stays as tight as it can while still being tunnel-proof.
+            -- Arrival radius covers one frame of travel, so the target can't be stepped over.
             local stepThisFrame = speed * deltaSeconds
 
-            -- A handoff sequence exits EARLY: its release distance replaces
-            -- ARRIVAL_RADIUS as the exit radius (never shrinks it - the
-            -- tunnel-proofing below still applies on top).
+            -- Handoff sequences exit early at their release distance.
             local exitRadius = ARRIVAL_RADIUS
             if s.handoffDistance and s.handoffDistance > 0 then
                 exitRadius = math.max(ARRIVAL_RADIUS, s.handoffDistance)
@@ -473,10 +422,7 @@ function Physics.update(deltaSeconds, isPaused)
 
             if currDist < arrivalRadius then
                 if not s.contToTime then
-                    -- movementV is still the raw target-minus-position delta
-                    -- at this point (it doesn't get normalized until below),
-                    -- which is exactly the direction+distance the caller
-                    -- needs to finish the move under engine movement.
+                    -- Raw target-minus-position: the remaining move.
                     if s.handoffDistance and s.handoffDistance > 0 then
                         s.handoffVector = movementV
                     end
@@ -504,16 +450,7 @@ function Physics.update(deltaSeconds, isPaused)
         local tpResult
         if s.graceFrames and s.graceFrames > 0 then
             s.graceFrames = s.graceFrames - 1
-            -- Grace frames: skip the collision cage entirely rather than
-            -- running it and discarding the result. Previously the cage
-            -- still ran and clamped the move distance even though the
-            -- resulting `collided` flag got zeroed out afterward - that's
-            -- what caused the "sticking" at the start of a self-pull
-            -- (you're standing right against the wall you just hooked, so
-            -- the cage clamps you to near-zero movement even though grace
-            -- frames are supposed to let you move freely away from it).
-            -- This also saves the 6 raycasts the cage would have spent
-            -- computing a result we were just going to throw away.
+            -- Grace frames skip the collision cage; it clamps a pull that starts against the wall.
             core.sendGlobalEvent('ragdollTeleport', { object = o.target, newPos = newPos })
             tpResult = { position = newPos, collided = false }
         else

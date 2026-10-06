@@ -309,7 +309,7 @@ Every one of these was found in shipped code in this suite.
 | **`PRIORITY.Scripted`** | Pauses every non-Scripted animation globally. Wrong for a short gesture — it freezes the walk cycle. Use `PRIORITY.Weapon` on an upper-body mask. |
 | **Missing bone is silent** | Attaching to a bone that does not exist is a no-show, not an error. Always `hasBone` first, and always declare a vanilla fallback. |
 | **`animation.cancel`** | Lives on `openmw.animation` and takes the actor. It is not on `I.AnimationController`. |
-| **`types.Actor.equipment`** | Does not exist. It is `getEquipment`. |
+| **`types.Actor.equipment`** | A compatibility alias for `getEquipment` in current OpenMW, marked for removal. Use `getEquipment`. |
 | **KF text keys** | A group keyed `loop start`/`loop stop` will not answer to `start`/`stop`. Read the keys out of the binary; the resulting stuck or absent pose reads as a scripting bug when it is a naming one. |
 | **`vfxId` and magic effects** | The engine uses `vfxId` to add and remove magic effects. The docs warn explicitly against ids that collide with `core.MagicEffectId` values. Namespace yours (`saw_w_<recordId>`, `cake_<category>`). |
 

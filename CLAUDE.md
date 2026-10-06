@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-OpenMW Hookshot Enhanced is a Lua mod for OpenMW 0.49+ (open-source Morrowind engine). It adds a Zelda-style hookshot that can pull items/actors toward the player, grapple to world surfaces, and rappel from anchor points.
+OpenMW Hookshot Enhanced is a Lua mod for OpenMW 0.49+ (rope visual 0.51+) (open-source Morrowind engine). It adds a Zelda-style hookshot that can pull items/actors toward the player, grapple to world surfaces, and rappel from anchor points.
 
 ## Development Workflow
 
@@ -18,20 +18,24 @@ There is no build system. This is a pure Lua mod loaded by OpenMW at runtime.
 
 ### Entry Point
 
-`OpenMWHookshot.omwscripts` registers two scripts:
-- `PLAYER: scripts/OpenMWHookshot/player.lua` — runs on the player (local context)
-- `GLOBAL: scripts/OpenMWHookshot/global.lua` — runs server-side for privileged operations
+`OpenMWHookshot.omwscripts` registers five scripts:
+- `PLAYER: scripts/OpenMWHookshot/player.lua` — core mod logic
+- `PLAYER: scripts/SharedRay/SharedRay_v2.lua` — shared camera ray (vendored)
+- `PLAYER: scripts/OpenMWHookshot/example_beam_consumer/player.lua` — rope interface
+- `GLOBAL: scripts/OpenMWHookshot/global.lua` — teleports and inventory moves
+- `GLOBAL: scripts/OpenMWHookshot/example_beam_consumer/global.lua` — rope renderer
 
 ### Module Responsibilities
 
-**player.lua (~2100 lines)** — Core mod logic. Contains:
-- State machine: `IDLE → DRAWN → FIRING → LANDING/HANGING → IDLE` (plus `ITEM_MENU`)
-- Target detection pipeline: camera raycast → surface probe → clearance check → ledge detection → target classification
-- Ragdoll physics: gravity simulation, stuck detection, collision response via `tpWithCollision()`
-- Reticle/UI: dynamic texture loading (T4rg3t5 compatibility or fallback), color-coded targeting, lock-on animation
-- Hanging/rappel: levitation effect via `interfaces.Controls`, vertical movement, clearance validation
-- Settings registration: all configurable options exposed through OpenMW's settings UI
-- Input: triggers (one-shot: HookshotActivate, HookshotSheath) and actions (continuous: RappelUp, RappelDown, RappelRelease)
+**player.lua** — State machine (`IDLE → DRAWN → FIRING → HANDOFF/LANDING/HANGING → IDLE`, plus `ITEM_MENU`), hook travel and rope, hanging/rappel, input handlers, save/load cleanup.
+
+**hookshot_physics.lua** — Ragdoll sequences, collision-aware teleport, physics tick. Returns completion events to player.lua.
+
+**hookshot_targeting.lua** — Surface probes, rappel clearance, ledge edge detection, target classification, aim-cone fallback.
+
+**hookshot_settings.lua** — Settings registration, live accessors, equipment gates, input registration.
+
+**hookshot_reticle.lua** — Crosshair UI. **hookshot_util.lua** — math, type checks, rope shoulder origin. **playerAnim.lua** — all animation calls.
 
 **global.lua** — Handles operations requiring global script authority:
 - `ragdollTeleport` event: moves objects via `teleport()` (only global scripts can teleport arbitrary objects)
@@ -67,7 +71,7 @@ Player scripts send events to global script for privileged operations:
   `hookshot_menu.lua` already does this.
 - `nearby.castRay()` for target detection (player/local script context only)
 - `types.X.objectIsInstance(obj)` for type checking items/actors
-- `camera` module for mode control (forced first-person during hang)
+- `camera` module for aim direction and crosshair visibility
 - `input.registerTrigger/registerAction` for keybindings
 - `interfaces.Settings.registerPage/registerGroup` for settings UI
 - `ambient.playSoundFile()` for audio feedback
@@ -76,8 +80,7 @@ Player scripts send events to global script for privileged operations:
 
 ## Refactoring
 
-See `REFACTORING.md` for the design document and phased roadmap to split `player.lua`
-into focused modules (settings, util, reticle, targeting, physics).
+`REFACTORING.md` records the completed split of `player.lua` into modules. Design reasoning is in the README's Design notes.
 
 ## File Layout
 
@@ -86,9 +89,10 @@ OpenMWHookshot.omwscripts        # Script manifest
 scripts/OpenMWHookshot/
   player.lua                     # Main mod logic (player-local)
   global.lua                     # Privileged operations (global)
-  hookshot_orient.lua            # Surface math utilities
-  hookshot_menu.lua              # Item interaction UI
-  backups/                       # Historical versions (do not modify)
+  hookshot_*.lua                 # physics, targeting, settings, reticle, util, orient, menu
+  playerAnim.lua                 # Animation controller
+  example_beam_consumer/         # Rope visuals (beamfx_adapter.lua is vendored)
+scripts/SharedRay/SharedRay_v2.lua  # Vendored
 Sound/                           # Audio assets (.mp3)
 Textures/                        # Reticle textures (.dds)
 ```

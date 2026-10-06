@@ -1,5 +1,7 @@
 # Hookshot Enhanced — Refactoring Design Document
 
+> Status: completed. Line counts below are historical.
+
 ## Problem Statement
 
 `player.lua` is ~2121 lines (post-Phase 0 cleanup) containing 7 distinct subsystems with interleaved concerns:

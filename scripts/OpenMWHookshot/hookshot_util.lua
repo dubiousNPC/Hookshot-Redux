@@ -1,12 +1,5 @@
 ---@omw-context player
-
---[[
-    hookshot_util.lua
-    Pure utility functions for hookshot mod.
-
-    Math helpers, object type classification, and array operations.
-    No side effects — no openmw.self, openmw.nearby, or openmw.camera imports.
-]]--
+-- Math helpers, type checks, array helpers. No self/nearby/camera imports.
 
 local types = require('openmw.types')
 local util = require('openmw.util')
@@ -39,40 +32,14 @@ function U.remapClamped(value, oldMin, oldMax, newMin, newMax)
     return math.max(newMin, math.min(newMax, remapped))
 end
 
-function U.angleBetweenVectors(v1, v2)
-    local dot = v1:dot(v2)
-    local len1 = v1:length()
-    local len2 = v2:length()
-    if len1 == 0 or len2 == 0 then return math.pi end
-    return math.acos(U.clamp(dot / (len1 * len2), -1, 1))
-end
-
 -- ==============================================
 -- RIGHT SHOULDER ORIGIN (rope/beam anchor)
 -- ==============================================
--- Approximate RIGHT SHOULDER world position for a given actor. Not a
--- queried bone - there is no documented Lua call for that from a local
--- script (checked against Cod3x) - so this is a tuned static offset from
--- the actor's root position/yaw, scaled by full standing height so it's
--- proportioned correctly across races/scales rather than one flat number.
--- Confirmed against Cod3x: types.Actor.getPathfindingAgentBounds(actor)
--- and actor.rotation:getYaw() are both documented, and util.transform's
--- own example doc comment uses exactly this
--- move(pos) * rotateZ(yaw) composition.
---
--- Local frame is x = right, y = forward, z = up, and actor.position sits
--- at the FEET (hookshot_physics.getBoundingData builds its cage upward
--- from position to +height, which only works feet-anchored). So the
--- height fraction is measured from the ground, and 0.81 of full standing
--- height is roughly where the shoulder joint sits on a humanoid - NOT 0.5,
--- which is waist height and is where a naive halfExtents.z offset lands.
---
--- THIS IS THE SINGLE SOURCE OF TRUTH for the rope anchor. player.lua and
--- example_beam_consumer both resolve to it, so the launch point can't
--- drift between the gameplay-side travel maths and the rendered beam.
-local SHOULDER_RIGHT_FRACTION = 0.13    -- centerline-to-shoulder / full height
-local SHOULDER_FORWARD_FRACTION = 0.05  -- pushes the point off the chest plane; 0 to disable
-local SHOULDER_HEIGHT_FRACTION = 0.81   -- shoulder height / full height, from the ground
+-- Single source of truth for the rope anchor. Static offset from the feet,
+-- scaled by standing height; local frame x = right, y = forward, z = up.
+local SHOULDER_RIGHT_FRACTION = 0.13
+local SHOULDER_FORWARD_FRACTION = 0.05
+local SHOULDER_HEIGHT_FRACTION = 0.81
 
 function U.actorShoulderOrigin(actor)
     local bounds = types.Actor.getPathfindingAgentBounds(actor)
@@ -85,9 +52,6 @@ function U.actorShoulderOrigin(actor)
     )
     return actor.position + util.transform.rotateZ(yaw) * localOffset
 end
-
--- Retained name for existing call sites. Same function, clearer name above.
-U.actorHandOrigin = U.actorShoulderOrigin
 
 -- ==============================================
 -- OBJECT TYPE CHECKING
@@ -120,8 +84,7 @@ end
 -- ARRAY HELPERS
 -- ==============================================
 
--- In-place array compaction: keeps elements where fnKeep returns true.
--- fnKeep(t, i, j) receives the array, source index, and destination index.
+-- In-place compaction: keeps elements where fnKeep(t, i, j) returns true.
 function U.arrayCompact(t, fnKeep)
     local j, n = 1, #t
     for i = 1, n do
@@ -139,6 +102,6 @@ end
 -- ==============================================
 -- SHARED CONSTANTS
 -- ==============================================
-U.PLAYER_HEIGHT = 128  -- Standard player height for probe calculations (used by targeting + physics)
+U.PLAYER_HEIGHT = 128
 
 return U
