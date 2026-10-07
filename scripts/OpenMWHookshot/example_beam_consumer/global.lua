@@ -1,7 +1,7 @@
 ---@omw-context global
 
--- Global rope renderer. A short self-expiring beam under one id per player,
--- re-armed by every ROPE_UPDATE, so a rope can never outlive the mod.
+-- Global rope renderer. One retained path per player under a short persistent
+-- lease: replacePathPoints renews it, so a rope cannot outlive the mod.
 
 local world = require("openmw.world")
 
@@ -12,7 +12,6 @@ local events = require("scripts.OpenMWHookshot.example_beam_consumer.events")
 -- ==============================================
 -- ROPE APPEARANCE
 -- ==============================================
--- Spelled out: a hand-built upsert skips the provider's presets.
 local ROPE_APPEARANCE = {
     style = "filament",
     radius = 0.50,
@@ -28,7 +27,13 @@ local ROPE_APPEARANCE = {
     fogInfluence = 1,
 }
 
--- Must stay above player.lua's KEEPALIVE_INTERVAL (0.15) or the rope flickers.
+-- Fixed topology: replacePathPoints requires this exact count every call.
+local ROPE_POINTS = 2
+
+-- Must stay above player.lua's KEEPALIVE_INTERVAL (0.15).
+local ROPE_LEASE = 0.5
+
+-- Legacy transient fallback, used only when the provider has no path methods.
 local ROPE_DURATION = 0.40
 local ROPE_FADE = 0.12
 
@@ -37,8 +42,24 @@ local ROPE_FADE = 0.12
 -- ==============================================
 local visuals
 
--- Nothing to rebuild: the player script republishes the rope next frame.
+local spaceKeyByCell = setmetatable({}, { __mode = "k" })
+local beamIdBySender = setmetatable({}, { __mode = "k" })
+
+-- spaceKey and point count per live beam id.
+local pathState = {}
+
+local removeUnsupported = false
+local pathUnsupported = false
+
+local function clearDerivedCaches()
+    spaceKeyByCell = setmetatable({}, { __mode = "k" })
+    beamIdBySender = setmetatable({}, { __mode = "k" })
+end
+
+-- A new provider generation can issue different space keys.
 local function reconstructPersistentVisuals(adapter, reason)
+    clearDerivedCaches()
+    pathState = {}
     return true
 end
 
@@ -50,12 +71,6 @@ visuals = BeamFXAdapter.new({
     retryMaximumSeconds = 5,
     warningIntervalSeconds = 30,
 })
-
--- Set once if the provider has no remove; ropes then end by expiry.
-local removeUnsupported = false
-
--- Space per beam id, so a worldspace change recreates the rope.
-local activeSpaceByBeamId = {}
 
 -- ==============================================
 -- VALIDATION
@@ -79,7 +94,10 @@ local function isPlayer(object)
         return false
     end
     local players = world.players
-    for index = 1, #players do
+    if players[1] == object then
+        return true
+    end
+    for index = 2, #players do
         if players[index] == object then
             return true
         end
@@ -94,23 +112,74 @@ end
 -- ==============================================
 -- BEAM IDENTITY
 -- ==============================================
--- One stable beam id per player.
 local function beamIdFor(sender)
+    local cached = beamIdBySender[sender]
+    if cached then return cached end
+
     local id = sender.id
+    local beamId
     if type(id) ~= "string" then
-        return "dbs_hookshot_rope"
+        beamId = "dbs_hookshot_rope"
+    else
+        beamId = "dbs_hookshot_rope_" .. id
     end
-    return "dbs_hookshot_rope_" .. id
+    beamIdBySender[sender] = beamId
+    return beamId
 end
 
+-- ==============================================
+-- GEOMETRY
+-- ==============================================
+-- from/to arrive fresh per event, so they can be handed over directly.
+local function ropePoints(from, to)
+    if ROPE_POINTS == 2 then
+        return { from, to }
+    end
+
+    local points = { from }
+    local last = ROPE_POINTS - 1
+    for i = 1, last - 1 do
+        local t = i / last
+        points[i + 1] = {
+            x = from.x + (to.x - from.x) * t,
+            y = from.y + (to.y - from.y) * t,
+            z = from.z + (to.z - from.z) * t,
+        }
+    end
+    points[ROPE_POINTS] = to
+    return points
+end
+
+local function pathSpec(spaceKey, points)
+    return {
+        spaceKey = spaceKey,
+        lifecycle = { mode = "persistent", leaseSeconds = ROPE_LEASE },
+        audience = { mode = "same_space" },
+        priority = "normal",
+        maxSegments = ROPE_POINTS - 1,
+        points = points,
+        segmentDefaults = ROPE_APPEARANCE,
+    }
+end
+
+-- Legacy single-segment transient spec.
 local function ropeSpec(spaceKey, from, to)
     local segment = {
         startPos = from,
         endPos = to,
+        style = ROPE_APPEARANCE.style,
+        radius = ROPE_APPEARANCE.radius,
+        minPixelWidth = ROPE_APPEARANCE.minPixelWidth,
+        outerColor = ROPE_APPEARANCE.outerColor,
+        coreColor = ROPE_APPEARANCE.coreColor,
+        baseColor = ROPE_APPEARANCE.baseColor,
+        coreRatio = ROPE_APPEARANCE.coreRatio,
+        intensity = ROPE_APPEARANCE.intensity,
+        opacity = ROPE_APPEARANCE.opacity,
+        baseOpacity = ROPE_APPEARANCE.baseOpacity,
+        depthSoftness = ROPE_APPEARANCE.depthSoftness,
+        fogInfluence = ROPE_APPEARANCE.fogInfluence,
     }
-    for field, value in pairs(ROPE_APPEARANCE) do
-        segment[field] = value
-    end
 
     return {
         spaceKey = spaceKey,
@@ -124,6 +193,16 @@ local function ropeSpec(spaceKey, from, to)
         maxSegments = 1,
         segments = { segment },
     }
+end
+
+local function removeBeam(beamId, reason)
+    pathState[beamId] = nil
+    if removeUnsupported then return end
+
+    local result, err = visuals:invoke("remove", beamId, reason)
+    if result == nil and err == "unsupported_api" then
+        removeUnsupported = true
+    end
 end
 
 -- ==============================================
@@ -143,31 +222,45 @@ local function onRopeUpdate(request)
         return
     end
 
-    local spaceKey = visuals:spaceKeyForCell(cell)
+    local spaceKey = spaceKeyByCell[cell]
     if spaceKey == nil then
-        return
+        spaceKey = visuals:spaceKeyForCell(cell)
+        if spaceKey == nil then
+            return
+        end
+        spaceKeyByCell[cell] = spaceKey
     end
 
     local beamId = beamIdFor(request.sender)
-    local previousSpaceKey = activeSpaceByBeamId[beamId]
-    if previousSpaceKey ~= nil
-        and previousSpaceKey ~= spaceKey
-        and not removeUnsupported
-    then
-        local removed, removeErr = visuals:invoke("remove", beamId, "space_changed")
-        if removed == nil and removeErr == "unsupported_api" then
-            removeUnsupported = true
-        end
+    local live = pathState[beamId]
+
+    if live and live.spaceKey ~= spaceKey then
+        removeBeam(beamId, "space_changed")
+        live = nil
     end
 
-    -- Visual only, best effort.
-    local result = visuals:invoke(
-        "upsert",
-        beamId,
-        ropeSpec(spaceKey, request.from, request.to)
-    )
+    if pathUnsupported then
+        if visuals:invoke("upsert", beamId, ropeSpec(spaceKey, request.from, request.to)) then
+            pathState[beamId] = { spaceKey = spaceKey, points = 2 }
+        end
+        return
+    end
+
+    local points = ropePoints(request.from, request.to)
+
+    if live and live.points == ROPE_POINTS then
+        if visuals:invoke("replacePathPoints", beamId, points) then
+            return
+        end
+        -- Provenance lost or count changed; rebuild below.
+        pathState[beamId] = nil
+    end
+
+    local result, err = visuals:invoke("upsertPath", beamId, pathSpec(spaceKey, points))
     if result ~= nil then
-        activeSpaceByBeamId[beamId] = spaceKey
+        pathState[beamId] = { spaceKey = spaceKey, points = ROPE_POINTS }
+    elseif err == "unsupported_api" then
+        pathUnsupported = true
     end
 end
 
@@ -175,18 +268,7 @@ local function onRopeEnd(request)
     if type(request) ~= "table" or not isPlayer(request.sender) then
         return
     end
-
-    local beamId = beamIdFor(request.sender)
-    activeSpaceByBeamId[beamId] = nil
-
-    if removeUnsupported then
-        return
-    end
-
-    local result, err = visuals:invoke("remove", beamId)
-    if result == nil and err == "unsupported_api" then
-        removeUnsupported = true
-    end
+    removeBeam(beamIdFor(request.sender), "retracted")
 end
 
 local function onUpdate()
@@ -194,12 +276,14 @@ local function onUpdate()
 end
 
 local function onLoad()
-    activeSpaceByBeamId = {}
+    pathState = {}
+    clearDerivedCaches()
     visuals:reset("load")
 end
 
 local function onNewGame()
-    activeSpaceByBeamId = {}
+    pathState = {}
+    clearDerivedCaches()
     visuals:reset("new_game")
 end
 

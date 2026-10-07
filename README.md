@@ -45,18 +45,26 @@ Reasoning that used to live in code comments.
 **Hook travel and rope**
 - The rope launch point is `U.actorShoulderOrigin` (0.81 of standing height, offset right and forward). Hook flight time is measured from it, so it never comes from the optional visual mod; the beam consumer uses the same helper so the drawn rope starts where the gameplay says.
 - The rope exists only while FIRING or HANGING. `setMode()` is the single choke point for state changes, so every exit path retracts it, and playerAnim sees every transition.
-- The global renderer draws a short self-expiring beam under one stable id per player, re-armed by each `ROPE_UPDATE`. A stalled or reloaded script can't leave a rope in the world; the player side sends on movement or every 0.15s, under the 0.40s expiry.
+- The global renderer keeps one retained path per player under a 0.5s persistent lease. `replacePathPoints` renews the lease, so a stalled or reloaded script still can't leave a rope in the world; the player side sends on movement or every 0.15s, well inside the lease.
+- The rope is created once with `upsertPath` and moved with `replacePathPoints` (BeamFX API 1.9), not re-`upsert`ed. `upsert` restarts the beam's longitudinal animation clock on every call, which pins any `travel`, `pulse` or `dash` pattern at phase zero; point replacement preserves `animationStartedAt`. It is also far cheaper: one points array instead of a full spec plus appearance expansion and revalidation, 60 times a second.
+- `ROPE_POINTS` fixes the path topology, because `replacePathPoints` requires the same point count every call. At 2 it is a straight line; above 2 the extra points are interpolated and a Verlet chain can replace that generator for sag. Each link is one visual record out of BeamFX's 64/128, so a long rope is not free.
+- A provider without the path methods falls back to the original transient single-segment `upsert`.
 
 **Pulls and handoff**
+- The handoff releases 90 units short and ends within 10 units of the aim point. The player arrives with no engine velocity, so the gap is covered at run speed, not pull speed: 55/24 gave a window of about 0.12s, which is too short for the `hookoff` pose to blend in at all.
 - Non-rappel grapples aim above the landing point and release short of it. OpenMW has no Lua velocity setter, so a teleported arrival has zero momentum and has to be stopped by the collision cage exactly where it's most likely to push through the surface. The last stretch is a jump plus normal air steering instead, which other movement mods can see.
 - Pulls ease out over the last 250 units, floored at 300 u/s so a slow pull never reads as stuck (stuck = under ~100 u/s). The arrival radius always covers one frame of travel, so a fast pull or a low frame rate can't step over the target.
 - Self-pulls skip the collision cage for their first frames: the player starts against the wall they hooked, and the cage would clamp the move to nothing.
 - `Physics.addSequence` refuses an untracked ragdoll. A queued sequence promises a completion event, and an orphaned ragdoll (removed while the item menu was open) would never send one, leaving the FIRING pose looping.
 
+**Animation**
+- Clip lengths are fixed in the `.kf`, so `playerAnim.SPEED` fits each one to how long its state actually lasts. The hang loops are the short ones — `hookhang` is 0.167s, a 6Hz twitch at speed 1 — and `hookoff` is the long one, a 1.0s clip over a window a third that length. Blend durations in the `Animations/*/*.yaml` files are derived from clip length divided by speed, so changing a speed means re-deriving its rule.
+- `Anim.verifyGroups()` prints each group's presence and text keys on first update when Debug Mode is on. A missing group or a group keyed `loop start` instead of `start` is silent in the engine, and the three clips that looked broken were neither.
+
 **Targeting**
 - Surface type comes from a dedicated short physics ray, not SharedRay's hit normal, which is unreliable.
 - Heightmap terrain is never a rappel floor. Ledge edges are told apart from rooftops by probing back toward the player: same height and flat means a continuous surface.
-- The aim cone catches thin items and actors the rendering ray misses.
+- The aim cone catches thin items and actors the rendering ray misses. Its type test runs last, behind the distance and angle culls: those are a few arithmetic ops, while `objectIsInstance` is an engine call, and the cone is walked over every nearby item and actor on every throttled tick.
 
 **Hanging**
 - The climb clamps the head, not the feet, against the anchor; the old feet limit let the upper body into the surface the hook was in.

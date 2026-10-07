@@ -223,7 +223,7 @@ interfaces.Settings.registerGroup {
         { key = "HANDOFF_RISE", renderer = "number", name = "Approach Height", default = 55,
           argument = { min = 0, max = 150, integer = true },
           description = 'How far above the landing point the drag aims, in game units. Produces an arc that comes in over the target instead of straight at it. 0 disables.' },
-        { key = "HANDOFF_DISTANCE", renderer = "number", name = "Release Distance", default = 55,
+        { key = "HANDOFF_DISTANCE", renderer = "number", name = "Release Distance", default = 90,
           argument = { min = 0, max = 150, integer = true },
           description = 'How far short of the aim point the drag releases, in game units. The remaining distance is covered by a jump and normal air movement. 0 disables.' },
     }

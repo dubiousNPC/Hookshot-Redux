@@ -13,19 +13,23 @@ blending_rules:
   - from: "*"
     to: "hookhang: *"
     easing: "sineOut"
-    duration: 0.06   # clip is 0.17s
+    duration: 0.14   # clip 0.17s at speed 0.4
   - from: "*"
     to: "hookhangdwn: *"
     easing: "sineOut"
-    duration: 0.11   # clip is 0.33s
+    duration: 0.22   # clip 0.33s at speed 0.5
   - from: "*"
     to: "hookhangup: *"
     easing: "sineOut"
-    duration: 0.11   # clip is 0.33s
+    duration: 0.22   # clip 0.33s at speed 0.5
   - from: "*"
     to: "hookitem: *"
     easing: "sineOut"
     duration: 0.22   # clip is 0.67s
+  - from: "*"
+    to: "hookoff: *"
+    easing: "sineOut"
+    duration: 0.10   # clip 1.0s at speed 1.5; handoff window is ~0.32s
   - from: "*"
     to: "hookshoot: *"
     easing: "sineOut"

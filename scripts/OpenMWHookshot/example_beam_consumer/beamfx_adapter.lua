@@ -6,7 +6,7 @@ local I = require("openmw.interfaces")
 local M = {}
 
 local API_MAJOR = 1
-local PREFERRED_API_MINOR = 5
+local PREFERRED_API_MINOR = 9
 local EMIT_API_MINOR = 3
 local MAX_SAFE_INTEGER = 9007199254740991
 
@@ -614,7 +614,7 @@ function M.new(options)
             logWarning(
                 "older_api_minor",
                 "BeamFX API 1." .. tostring(minor)
-                    .. " detected; API 1.5 fields may be unavailable; compatibility fallbacks remain active"
+                    .. " detected; newer API fields may be unavailable; compatibility fallbacks remain active"
             )
         end
         return producer

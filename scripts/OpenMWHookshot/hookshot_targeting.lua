@@ -310,11 +310,11 @@ end
 -- FALLBACK GRABBABLE DETECTION
 -- ==============================================
 -- Closest grabbable near the aim, for objects the ray misses. cameraDir is unit length.
-local function checkFallbackCandidate(obj, cameraPos, cameraDir, maxRangeSq, best)
+-- `accept` runs last: it is the only expensive test, so distance and angle cull first.
+local function checkFallbackCandidate(obj, cameraPos, cameraDir, maxRangeSq, best, accept)
     local toObj = obj.position - cameraPos
     local distSq = toObj:dot(toObj)
 
-    -- Squared-distance cull first.
     if distSq > maxRangeSq or distSq < 1e-6 then
         return
     end
@@ -322,11 +322,19 @@ local function checkFallbackCandidate(obj, cameraPos, cameraDir, maxRangeSq, bes
     local distance = math.sqrt(distSq)
     local angle = math.acos(U.clamp(toObj:dot(cameraDir) / distance, -1, 1))
 
-    if angle < best.angle or (angle < ITEM_DETECTION_ANGLE_THRESHOLD and distance < best.distance * 0.5) then
-        best.target = obj
-        best.angle = angle
-        best.distance = distance
+    if not (angle < best.angle
+        or (angle < ITEM_DETECTION_ANGLE_THRESHOLD and distance < best.distance * 0.5))
+    then
+        return
     end
+
+    if accept and not accept(obj) then
+        return
+    end
+
+    best.target = obj
+    best.angle = angle
+    best.distance = distance
 end
 
 function Targeting.findGrabbableNearAim(cameraPos, cameraDir, maxRange)
@@ -339,16 +347,19 @@ function Targeting.findGrabbableNearAim(cameraPos, cameraDir, maxRange)
 
     -- Items skipped entirely when item targeting is locked.
     if capabilities.itemTargeting then
-        for _, item in ipairs(nearby.items) do
-            if U.isCarriableItem(item) then
-                checkFallbackCandidate(item, cameraPos, cameraDir, maxRangeSq, best)
-            end
+        local items = nearby.items
+        for i = 1, #items do
+            checkFallbackCandidate(items[i], cameraPos, cameraDir, maxRangeSq, best,
+                U.isCarriableItem)
         end
     end
 
-    for _, actor in ipairs(nearby.actors) do
-        if actor ~= self.object and U.isActor(actor) then
-            checkFallbackCandidate(actor, cameraPos, cameraDir, maxRangeSq, best)
+    local actors = nearby.actors
+    local me = self.object
+    for i = 1, #actors do
+        local actor = actors[i]
+        if actor ~= me then
+            checkFallbackCandidate(actor, cameraPos, cameraDir, maxRangeSq, best, U.isActor)
         end
     end
 

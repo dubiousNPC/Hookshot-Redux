@@ -1,0 +1,276 @@
+[
+  {
+    "type": "Header",
+    "flags": [
+      0,
+      0
+    ],
+    "version": 1.3,
+    "file_type": "Esp",
+    "author": "",
+    "description": "",
+    "num_objects": 13,
+    "masters": [
+      [
+        "Morrowind.esm",
+        79837557
+      ]
+    ]
+  },
+  {
+    "type": "Weapon",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hookshot_dart",
+    "data": {
+      "weight": 0.3,
+      "value": 20,
+      "weapon_type": "MarksmanThrown",
+      "health": 50,
+      "speed": 1.0,
+      "reach": 1.0,
+      "enchantment": 20,
+      "chop_min": 2,
+      "chop_max": 5,
+      "slash_min": 1,
+      "slash_max": 0,
+      "thrust_min": 1,
+      "thrust_max": 0,
+      "flags": 3
+    },
+    "mesh": "sj/dwemerhookdart.nif",
+    "name": "Hook dart",
+    "icon": "w/tx_w_dart_steel.dds"
+  },
+  {
+    "type": "Bodypart",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hookshot_adv.1st",
+    "data": {
+      "part": "Wrist",
+      "vampire": 0,
+      "female": 0,
+      "part_type": "Armor"
+    },
+    "mesh": "sj/dwemer_bracer_hook.nif"
+  },
+  {
+    "type": "Bodypart",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hookshot_ar_w",
+    "data": {
+      "part": "Wrist",
+      "vampire": 0,
+      "female": 0,
+      "part_type": "Armor"
+    },
+    "mesh": "dbs/dbs_hookshot.nif"
+  },
+  {
+    "type": "Bodypart",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hookshot_ar_w.1st",
+    "data": {
+      "part": "Wrist",
+      "vampire": 0,
+      "female": 0,
+      "part_type": "Armor"
+    },
+    "mesh": "dbs/dbs_hookshot_gnd.nif"
+  },
+  {
+    "type": "Bodypart",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hookshot_item.1st",
+    "data": {
+      "part": "Wrist",
+      "vampire": 0,
+      "female": 0,
+      "part_type": "Armor"
+    },
+    "mesh": "dbs/dbs_hookshot_item.nif"
+  },
+  {
+    "type": "Bodypart",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hookshot_item_w",
+    "data": {
+      "part": "Wrist",
+      "vampire": 0,
+      "female": 0,
+      "part_type": "Armor"
+    },
+    "mesh": "dbs/dbs_hookshot_item.nif"
+  },
+  {
+    "type": "Bodypart",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hookshot_mando",
+    "data": {
+      "part": "Hand",
+      "vampire": 0,
+      "female": 0,
+      "part_type": "Armor"
+    },
+    "mesh": "a/a_mandalore_gauntets.nif"
+  },
+  {
+    "type": "Bodypart",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hookshot_mando.1st",
+    "data": {
+      "part": "Hand",
+      "vampire": 0,
+      "female": 0,
+      "part_type": "Armor"
+    },
+    "mesh": "a/a_mandalore_gauntets.1st.nif"
+  },
+  {
+    "type": "Bodypart",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hooshot_adv",
+    "data": {
+      "part": "Wrist",
+      "vampire": 0,
+      "female": 0,
+      "part_type": "Armor"
+    },
+    "mesh": "sj/dwemer_bracer_hook.nif"
+  },
+  {
+    "type": "Armor",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hookshot_adv",
+    "data": {
+      "armor_type": "RightGauntlet",
+      "weight": 2.0,
+      "value": 1000,
+      "health": 50,
+      "enchantment": 100,
+      "armor_rating": 0
+    },
+    "name": "Advanced Hookshot",
+    "mesh": "sj/dwemer_bracer_hook.nif",
+    "icon": "dbs/hookshot_adv.tga",
+    "biped_objects": [
+      {
+        "biped_object_type": "RightWrist",
+        "male_bodypart": "dbs_hooshot_adv",
+        "female_bodypart": null
+      }
+    ]
+  },
+  {
+    "type": "Armor",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hookshot_ar",
+    "data": {
+      "armor_type": "RightGauntlet",
+      "weight": 3.0,
+      "value": 100,
+      "health": 50,
+      "enchantment": 0,
+      "armor_rating": 0
+    },
+    "name": "Hookshot",
+    "mesh": "dbs/dbs_hookshot_item_gnd1.nif",
+    "icon": "dbs/dbs_hookshot.tga",
+    "biped_objects": [
+      {
+        "biped_object_type": "RightWrist",
+        "male_bodypart": "dbs_hookshot_item_w",
+        "female_bodypart": null
+      }
+    ]
+  },
+  {
+    "type": "Armor",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hookshot_item",
+    "data": {
+      "armor_type": "RightGauntlet",
+      "weight": 3.0,
+      "value": 100,
+      "health": 50,
+      "enchantment": 50,
+      "armor_rating": 0
+    },
+    "name": "Hookshot",
+    "mesh": "dbs/dbs_hookshot_gnd.nif",
+    "icon": "dbs/hookshot_wm.tga",
+    "biped_objects": [
+      {
+        "biped_object_type": "RightWrist",
+        "male_bodypart": "dbs_hookshot_ar_w",
+        "female_bodypart": null
+      }
+    ]
+  },
+  {
+    "type": "Armor",
+    "flags": [
+      0,
+      0
+    ],
+    "id": "dbs_hs_mandalore",
+    "data": {
+      "armor_type": "RightGauntlet",
+      "weight": 3.0,
+      "value": 200,
+      "health": 150,
+      "enchantment": 100,
+      "armor_rating": 10
+    },
+    "name": "Mandalore Grapnel Gauntlet",
+    "mesh": "a/a_mandalore_gauntets.1st.nif",
+    "icon": "a/a_gaunt_mandalore.tga",
+    "biped_objects": [
+      {
+        "biped_object_type": "RightHand",
+        "male_bodypart": "dbs_hookshot_mando",
+        "female_bodypart": null
+      },
+      {
+        "biped_object_type": "RightWrist",
+        "male_bodypart": null,
+        "female_bodypart": null
+      }
+    ]
+  }
+]

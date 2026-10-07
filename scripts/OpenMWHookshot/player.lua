@@ -68,8 +68,8 @@ local RAPPEL_LEVITATION_MAGNITUDE = 10   -- Levitation effect magnitude (same as
 local PULL_OFFSET = 50              -- Hardcoded offset for pull target position
 
 -- Handoff: engine movement covers the last stretch after the drag releases.
-local HANDOFF_DURATION = 0.6        -- Max length of the handoff window (seconds)
-local HANDOFF_ARRIVAL = 24          -- Horizontal distance to target that ends the window early
+local HANDOFF_DURATION = 0.8        -- Max length of the handoff window (seconds)
+local HANDOFF_ARRIVAL = 10          -- Horizontal distance to target that ends the window early
 local HANDOFF_GROUND_PROBE = 24     -- Downward probe length used to decide whether a jump would take
 
 -- Rappel climb stops with the head this far below the anchor.
@@ -559,6 +559,8 @@ end
 -- ==============================================
 -- In onActive, once the winning SharedRay copy is registered.
 local function onActive()
+    if settings.debugMode() then Anim.verifyGroups() end
+
     if not I.SharedRay then
         print("[HOOKSHOT] I.SharedRay interface not found - reticle targeting will not work. Make sure SharedRay_v2.lua is installed alongside this mod.")
         return

@@ -23,6 +23,19 @@ local FIRING_GROUPS = {
     default = "hookgo", -- wall, floor, ceiling, rappel, none
 }
 
+-- Playback speed per group. Clip lengths are fixed in the .kf; these fit them
+-- to how long each state actually lasts. Under 1 stretches, over 1 compresses.
+local SPEED = {
+    hookaim     = 0.8,  -- 0.833s held aim loop
+    hookshoot   = 1.0,  -- 0.500s
+    hookitem    = 1.0,  -- 0.667s
+    hookgo      = 1.0,  -- 0.667s
+    hookoff     = 1.5,  -- 1.000s clip over a ~0.32s handoff window
+    hookhang    = 0.4,  -- 0.167s loop, 6Hz at speed 1
+    hookhangup  = 0.5,  -- 0.333s loop
+    hookhangdwn = 0.5,  -- 0.333s loop
+}
+
 local FULLBODY_PRIORITY = {
     [anim.BONE_GROUP.RightArm] = anim.PRIORITY.Weapon,
     [anim.BONE_GROUP.LeftArm] = anim.PRIORITY.Weapon,
@@ -60,6 +73,7 @@ local function playPose(group, priority, blendMask)
         stopKey = "stop",
         priority = priority,
         blendMask = blendMask,
+        speed = SPEED[group] or 1,
         loops = 0,
         forceLoop = true,
         autoDisable = false,
@@ -132,6 +146,47 @@ function Anim.forceReset()
     end
     for _, group in pairs(FIRING_GROUPS) do
         releaseGroup(group)
+    end
+end
+
+-- Startup probe: a missing group or key is silent in the engine.
+local verified = false
+
+function Anim.verifyGroups()
+    if verified then return end
+    verified = true
+
+    if not anim.hasGroup then
+        print("[HOOKSHOT][anim] animation.hasGroup unavailable - skipping probe")
+        return
+    end
+
+    local names = {}
+    for _, group in pairs(GROUPS) do names[#names + 1] = group end
+    for _, group in pairs(FIRING_GROUPS) do names[#names + 1] = group end
+    table.sort(names)
+
+    for i = 1, #names do
+        local group = names[i]
+        if not anim.hasGroup(self, group) then
+            print(string.format("[HOOKSHOT][anim] %-12s MISSING GROUP (no pose)", group))
+        elseif not anim.getTextKeyTime then
+            print(string.format("[HOOKSHOT][anim] %-12s group OK (keys unchecked)", group))
+        else
+            local bad = {}
+            for _, key in ipairs({ "start", "stop" }) do
+                if not anim.getTextKeyTime(self, group .. ": " .. key) then
+                    bad[#bad + 1] = key
+                end
+            end
+            if #bad == 0 then
+                print(string.format("[HOOKSHOT][anim] %-12s OK  speed=%.2f",
+                    group, SPEED[group] or 1))
+            else
+                print(string.format("[HOOKSHOT][anim] %-12s MISSING KEY(S): %s",
+                    group, table.concat(bad, ", ")))
+            end
+        end
     end
 end
 

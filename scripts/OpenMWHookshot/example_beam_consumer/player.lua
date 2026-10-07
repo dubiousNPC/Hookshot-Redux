@@ -14,7 +14,7 @@ local U = require("scripts.OpenMWHookshot.hookshot_util")
 -- ==============================================
 -- Sends on movement, or every KEEPALIVE_INTERVAL; the global beam self-expires.
 local KEEPALIVE_INTERVAL = 0.15  -- must stay under global.lua's ROPE_DURATION
-local MIN_MOVE = 0.25
+local MIN_MOVE = 2.0
 
 local rope = {
     active = false,
