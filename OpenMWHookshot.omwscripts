@@ -1,5 +1,9 @@
 PLAYER: scripts/OpenMWHookshot/player.lua
 PLAYER: scripts/SharedRay/SharedRay_v2.lua
+PLAYER: scripts/AnimRefresh/AnimRefresh_v6.lua
 PLAYER: scripts/OpenMWHookshot/example_beam_consumer/player.lua
+NPC: scripts/OpenMWHookshot/actorAnim.lua
+CREATURE: scripts/OpenMWHookshot/actorAnim.lua
+MENU: scripts/OpenMWHookshot/dropin/textSet.lua
 GLOBAL: scripts/OpenMWHookshot/global.lua
 GLOBAL: scripts/OpenMWHookshot/example_beam_consumer/global.lua

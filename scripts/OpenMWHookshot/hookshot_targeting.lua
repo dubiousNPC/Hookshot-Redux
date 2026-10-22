@@ -20,11 +20,13 @@ local Targeting = {}
 -- ==============================================
 -- Set from player.lua on draw and fire. Permissive by default.
 local capabilities = {
-    itemTargeting = true,
+    item = true,
+    npc = true,
 }
 
 function Targeting.setCapabilities(caps)
-    capabilities.itemTargeting = (caps == nil) or (caps.itemTargeting ~= false)
+    capabilities.item = (caps == nil) or (caps.item ~= false)
+    capabilities.npc = (caps == nil) or (caps.npc ~= false)
 end
 
 -- ==============================================
@@ -285,10 +287,14 @@ function Targeting.getTargetType(hitObject, surfaceType, hitPos, hitNormal, came
     end
 
     if U.isActor(hitObject) then
+        -- A locked mode reads as no target, so the reticle never promises a
+        -- pull that fireHookshot will refuse.
+        if not capabilities.npc then
+            return "none"
+        end
         return "enemy"
     elseif U.isCarriableItem(hitObject) then
-        -- Locked item targeting reads as no target.
-        if not capabilities.itemTargeting then
+        if not capabilities.item then
             return "none"
         end
         return "item"
@@ -346,7 +352,7 @@ function Targeting.findGrabbableNearAim(cameraPos, cameraDir, maxRange)
     local maxRangeSq = maxRange * maxRange
 
     -- Items skipped entirely when item targeting is locked.
-    if capabilities.itemTargeting then
+    if capabilities.item then
         local items = nearby.items
         for i = 1, #items do
             checkFallbackCandidate(items[i], cameraPos, cameraDir, maxRangeSq, best,
@@ -354,12 +360,14 @@ function Targeting.findGrabbableNearAim(cameraPos, cameraDir, maxRange)
         end
     end
 
-    local actors = nearby.actors
-    local me = self.object
-    for i = 1, #actors do
-        local actor = actors[i]
-        if actor ~= me then
-            checkFallbackCandidate(actor, cameraPos, cameraDir, maxRangeSq, best, U.isActor)
+    if capabilities.npc then
+        local actors = nearby.actors
+        local me = self.object
+        for i = 1, #actors do
+            local actor = actors[i]
+            if actor ~= me then
+                checkFallbackCandidate(actor, cameraPos, cameraDir, maxRangeSq, best, U.isActor)
+            end
         end
     end
 

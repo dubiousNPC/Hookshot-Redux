@@ -18,10 +18,13 @@ There is no build system. This is a pure Lua mod loaded by OpenMW at runtime.
 
 ### Entry Point
 
-`OpenMWHookshot.omwscripts` registers five scripts:
+`OpenMWHookshot.omwscripts` registers:
 - `PLAYER: scripts/OpenMWHookshot/player.lua` — core mod logic
 - `PLAYER: scripts/SharedRay/SharedRay_v2.lua` — shared camera ray (vendored)
+- `PLAYER: scripts/AnimRefresh/AnimRefresh_v6.lua` — model-rebuild notices (vendored)
 - `PLAYER: scripts/OpenMWHookshot/example_beam_consumer/player.lua` — rope interface
+- `NPC` / `CREATURE: scripts/OpenMWHookshot/actorAnim.lua` — dragged-in pose on a hooked actor
+- `MENU: scripts/OpenMWHookshot/dropin/textSet.lua` — the `textSet_V1` settings renderer (vendored)
 - `GLOBAL: scripts/OpenMWHookshot/global.lua` — teleports and inventory moves
 - `GLOBAL: scripts/OpenMWHookshot/example_beam_consumer/global.lua` — rope renderer
 
@@ -91,6 +94,8 @@ scripts/OpenMWHookshot/
   global.lua                     # Privileged operations (global)
   hookshot_*.lua                 # physics, targeting, settings, reticle, util, orient, menu
   playerAnim.lua                 # Animation controller
+  actorAnim.lua                  # Pose played on a hooked actor (NPC/CREATURE)
+  dropin/                        # Bor's Drop-in Utils (vendored): textSet, settingsCache
   example_beam_consumer/         # Rope visuals (beamfx_adapter.lua is vendored)
 scripts/SharedRay/SharedRay_v2.lua  # Vendored
 Sound/                           # Audio assets (.mp3)

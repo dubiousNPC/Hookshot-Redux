@@ -61,6 +61,19 @@ Reasoning that used to live in code comments.
 - Clip lengths are fixed in the `.kf`, so `playerAnim.SPEED` fits each one to how long its state actually lasts. The hang loops are the short ones — `hookhang` is 0.167s, a 6Hz twitch at speed 1 — and `hookoff` is the long one, a 1.0s clip over a window a third that length. Blend durations in the `Animations/*/*.yaml` files are derived from clip length divided by speed, so changing a speed means re-deriving its rule.
 - `Anim.verifyGroups()` prints each group's presence and text keys on first update when Debug Mode is on. A missing group or a group keyed `loop start` instead of `start` is silent in the engine, and the three clips that looked broken were neither.
 
+**Equipment gates**
+- Four whitelists -- Grapple, Item, Npc, Special -- each a `textSet_V1` set of record ids. An empty list inherits the base glove gate, so an upgrade changes nothing until a list is populated. A populated list is the gate on its own, so an id from another mod works without being added to `GLOVE_RECORD_IDS`; drawing is allowed whenever any one mode is. Anything in Special unlocks every mode.
+- The gate sets are read live on draw and fire rather than cached. They are read a few times per keypress, and they are the settings most likely to be edited while the game is running.
+- A locked mode reads as `"none"` from `getTargetType`, so the reticle greys out and the aim-cone scan skips that object class entirely. The reticle never offers a pull that `fireHookshot` will refuse.
+
+**Hooked actors**
+- An actor being dragged in plays `hsfalling` from `actorAnim.lua`, an NPC/CREATURE script with an event handler and no per-frame work. The group name is `hsfalling`; the file is `xhsfalling1.kf`, and the group comes from the text key, not the filename.
+- The pose is started by event and stopped by the actor's own timer, so a dead or reloaded player script cannot leave an NPC stuck in it. A generation counter means a re-hook extends rather than double-stops.
+- `animation.hasGroup` is checked first. Creatures have their own skeletons and will not have the clip, and naming a group the skeleton lacks suppresses the actor's own animation and supplies nothing.
+
+**Settings**
+- Per-frame accessors read from a `settingsCache` mirror (Bor's Drop-in Utils) rather than calling into storage. The reticle alone reads six or seven of them every frame.
+
 **Targeting**
 - Surface type comes from a dedicated short physics ray, not SharedRay's hit normal, which is unreliable.
 - Heightmap terrain is never a rappel floor. Ledge edges are told apart from rooftops by probing back toward the player: same height and flat means a continuous surface.

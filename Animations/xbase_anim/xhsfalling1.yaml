@@ -1,0 +1,10 @@
+blending_rules:
+  - from: "*"
+    to: "*"
+    easing: "sineOut"
+    duration: 0.25
+
+  - from: "*"
+    to: "hsfalling: *"
+    easing: "sineOut"
+    duration: 0.18   # 1.5s clip, looping section 0.03-1.47

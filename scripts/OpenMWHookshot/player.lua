@@ -63,6 +63,12 @@ local HOOKSHOT_PHY = nearby.COLLISION_TYPE.World
                    + nearby.COLLISION_TYPE.Actor
 
 local RAYCAST_THROTTLE = 3          -- Only raycast every N frames for targeting
+-- Falling pose played on a hooked actor while it is dragged in. Duration is a
+-- failsafe: the actor script cancels on its own, so a dead player script cannot
+-- leave an NPC stuck in the pose.
+local HOOKED_ACTOR_EVENT = "Dubious_HookShot_ActorHooked"
+local ACTOR_FALL_DURATION = 1.5
+
 local LANDING_DURATION = 0.4        -- How long the landing state lasts (physics settle time)
 local RAPPEL_LEVITATION_MAGNITUDE = 10   -- Levitation effect magnitude (same as ladder mod)
 local PULL_OFFSET = 50              -- Hardcoded offset for pull target position
@@ -125,7 +131,10 @@ local state = {
     -- Resolved on draw and fire, not per frame.
     caps = {
         glove = false,
-        itemTargeting = false,
+        grapple = false,
+        item = false,
+        npc = false,
+        special = false,
     },
 
     hanging = {
@@ -1164,6 +1173,9 @@ attachTravelingHook = function(anchor)
 
         rope.phase = ROPE_PHASE_TARGET_PULL
         debugPrint("Hook attached - pulling target to player")
+        if isActor(rope.target) then
+            rope.target:sendEvent(HOOKED_ACTOR_EVENT, { duration = ACTOR_FALL_DURATION })
+        end
         if not pullHookedObject(rope.target, rope.approachDir) then
             abortActiveHook("target_pull_failed")
         end
@@ -1228,9 +1240,21 @@ local function fireHookshot()
         return
     end
 
-    if isCarriableItem(target) and not caps.itemTargeting then
+    if isCarriableItem(target) and not caps.item then
         ui.showMessage("Your hookshot can't draw items to you")
-        debugPrint("Item targeting locked - aborting fire")
+        debugPrint("Item gate locked - aborting fire")
+        return
+    end
+
+    if isActor(target) and not caps.npc then
+        ui.showMessage("Your hookshot can't pull creatures")
+        debugPrint("Npc gate locked - aborting fire")
+        return
+    end
+
+    if not isGrabbable(target) and not caps.grapple then
+        ui.showMessage("Your hookshot can't pull you to that")
+        debugPrint("Grapple gate locked - aborting fire")
         return
     end
 
@@ -1288,7 +1312,8 @@ local function tryActivateHookshot()
             ui.showMessage("You need to equip a hookshot")
             return
         end
-        debugPrint("Mode is IDLE - drawing hookshot (item targeting =", tostring(caps.itemTargeting), ")")
+        debugPrint("Mode is IDLE - drawing hookshot (grapple =", tostring(caps.grapple),
+                   "item =", tostring(caps.item), "npc =", tostring(caps.npc), ")")
         drawHookshot()
     elseif state.mode == HookshotState.HANGING then
         debugPrint("Mode is HANGING - cannot use hookshot while hanging")

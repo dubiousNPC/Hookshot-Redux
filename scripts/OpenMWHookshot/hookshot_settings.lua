@@ -2,6 +2,7 @@
 
 -- Settings registration, live accessors, equipment gates, debugPrint.
 
+local async = require('openmw.async')
 local interfaces = require('openmw.interfaces')
 local storage = require('openmw.storage')
 local input = require('openmw.input')
@@ -29,8 +30,9 @@ settings.GLOVE_RECORD_IDS = {
     "dbs_hookshot_ar",
 }
 
--- ITEM_TARGET_RECORD_IDS gates item pull. Empty = same as the glove gate.
-settings.ITEM_TARGET_RECORD_IDS = {}
+-- Per-function whitelists live in the Equipment Gates settings group as
+-- textSet values: { ["id"] = true }. Empty set = inherit the glove gate.
+-- An id in the Special set grants every function.
 
 -- One pass over the equipment table into a lowercase id set.
 local function equippedRecordIdSet(actor)
@@ -53,21 +55,46 @@ local function anyEquipped(equipped, recordIds)
     return false
 end
 
+local function anyEquippedInSet(equipped, idSet)
+    if type(idSet) ~= "table" then return false, false end
+    local populated = false
+    for id, enabled in pairs(idSet) do
+        if enabled then
+            populated = true
+            if equipped[tostring(id):lower()] then
+                return true, true
+            end
+        end
+    end
+    return false, populated
+end
+
 -- Every gate from one equipment scan. Call on input, not per frame.
 function settings.capabilities(actor)
     local equipped = equippedRecordIdSet(actor)
     local hasGlove = anyEquipped(equipped, settings.GLOVE_RECORD_IDS)
+    local special = anyEquippedInSet(equipped, settings.gateSpecial())
 
-    local itemTargeting
-    if #settings.ITEM_TARGET_RECORD_IDS == 0 then
-        itemTargeting = hasGlove
-    else
-        itemTargeting = hasGlove and anyEquipped(equipped, settings.ITEM_TARGET_RECORD_IDS)
+    -- A populated whitelist is the gate on its own, so a custom id works
+    -- without being listed in GLOVE_RECORD_IDS. Empty falls back to the glove.
+    local function gate(idSet)
+        if special then return true end
+        local matched, populated = anyEquippedInSet(equipped, idSet)
+        if populated then return matched end
+        return hasGlove
     end
 
+    local grapple = gate(settings.gateGrapple())
+    local item = gate(settings.gateItem())
+    local npc = gate(settings.gateNpc())
+
     return {
-        glove = hasGlove,
-        itemTargeting = itemTargeting,
+        -- Drawing is allowed if any function is, so a whitelist-only id is usable.
+        glove = hasGlove or special or grapple or item or npc,
+        grapple = grapple,
+        item = item,
+        npc = npc,
+        special = special,
     }
 end
 
@@ -348,27 +375,79 @@ local colorSection = storage.playerSection("Settings_OpenMW_Hookshot_Colors")
 local handoffSection = storage.playerSection("Settings_OpenMW_Hookshot_Handoff")
 
 -- ==============================================
+-- EQUIPMENT GATE SETTINGS
+-- ==============================================
+-- textSet_V1 comes from scripts/OpenMWHookshot/dropin/textSet.lua, registered
+-- as a MENU script. Each value is { ["recordid"] = true }.
+interfaces.Settings.registerGroup {
+    key = "Settings_OpenMW_Hookshot_Gates",
+    page = "OpenMWHookshotPg",
+    l10n = "OpenMWHookshot",
+    name = "Equipment Gates",
+    description = "Which equipped item unlocks which firing mode. Leave a list empty to allow any hookshot. Anything in Special unlocks every mode.",
+    permanentStorage = true,
+    order = 5,
+    settings = {
+        { key = "GATE_GRAPPLE", renderer = "textSet_V1", name = "Grapple",
+          default = {}, argument = { lower = true },
+          description = 'Record ids that may pull the player to world geometry. Empty allows any hookshot.' },
+        { key = "GATE_ITEM", renderer = "textSet_V1", name = "Item",
+          default = {}, argument = { lower = true },
+          description = 'Record ids that may pull carriable items. Empty allows any hookshot.' },
+        { key = "GATE_NPC", renderer = "textSet_V1", name = "Npc",
+          default = {}, argument = { lower = true },
+          description = 'Record ids that may pull actors. Empty allows any hookshot.' },
+        { key = "GATE_SPECIAL", renderer = "textSet_V1", name = "Special",
+          default = {}, argument = { lower = true },
+          description = 'Record ids that unlock every firing mode, whatever the other lists say.' },
+    }
+}
+local gateSection = storage.playerSection("Settings_OpenMW_Hookshot_Gates")
+
+local EMPTY_SET = {}
+
+-- ==============================================
+-- SETTINGS CACHE
+-- ==============================================
+-- dropin/settingsCache.lua mirrors each section into a plain table and keeps it
+-- current by subscription, so the per-frame accessors below are table reads
+-- rather than storage lookups. Same values, same nil behaviour.
+local settingsCache = require('scripts.OpenMWHookshot.dropin.settingsCache')
+
+local basic = settingsCache.new(basicSection, async)
+local reticle = settingsCache.new(reticleSection, async)
+local colors = settingsCache.new(colorSection, async)
+local handoff = settingsCache.new(handoffSection, async)
+
+-- ==============================================
 -- REACTIVE ACCESSORS
 -- ==============================================
 
-function settings.maxRange()           return basicSection:get("MAX_HOOKSHOT_RANGE") end
-function settings.pullSpeed()          return basicSection:get("PULL_SPD") end
-function settings.hookTravelSpeed()    return basicSection:get("HOOK_TRAVEL_SPEED") or 4000 end
-function settings.rappelClimbSpeed()   return basicSection:get("RAPPEL_CLIMB_SPD") end
-function settings.rappelFunMode()      return basicSection:get("RAPPEL_FUN_MODE") end
-function settings.minRappelClearance() return basicSection:get("MIN_RAPPEL_CLEARANCE") end
-function settings.debugMode()          return basicSection:get("DEBUG_MODE") end
+-- Read live, not cached: these are read on draw and fire, a few times per
+-- keypress, and are the settings most likely to be edited mid-session.
+function settings.gateGrapple() return gateSection:get("GATE_GRAPPLE") or EMPTY_SET end
+function settings.gateItem()    return gateSection:get("GATE_ITEM") or EMPTY_SET end
+function settings.gateNpc()     return gateSection:get("GATE_NPC") or EMPTY_SET end
+function settings.gateSpecial() return gateSection:get("GATE_SPECIAL") or EMPTY_SET end
 
-function settings.handoffRise()        return handoffSection:get("HANDOFF_RISE") or 0 end
-function settings.handoffDistance()    return handoffSection:get("HANDOFF_DISTANCE") or 0 end
+function settings.maxRange()           return basic.MAX_HOOKSHOT_RANGE end
+function settings.pullSpeed()          return basic.PULL_SPD end
+function settings.hookTravelSpeed()    return basic.HOOK_TRAVEL_SPEED or 4000 end
+function settings.rappelClimbSpeed()   return basic.RAPPEL_CLIMB_SPD end
+function settings.rappelFunMode()      return basic.RAPPEL_FUN_MODE end
+function settings.minRappelClearance() return basic.MIN_RAPPEL_CLEARANCE end
+function settings.debugMode()          return basic.DEBUG_MODE end
 
-function settings.reticleIcon()        return reticleSection:get("RETICLE_ICON") end
-function settings.reticleIdleSize()    return reticleSection:get("RETICLE_IDLE_SIZE") end
-function settings.reticleMinSize()     return reticleSection:get("RETICLE_MIN_SIZE") end
-function settings.reticleMaxSize()     return reticleSection:get("RETICLE_MAX_SIZE") end
-function settings.reticleMinDistance()  return reticleSection:get("RETICLE_MIN_DISTANCE") end
-function settings.reticleMaxDistance()  return reticleSection:get("RETICLE_MAX_DISTANCE") end
-function settings.lockAnimation()      return reticleSection:get("ENABLE_LOCK_ANIMATION") end
+function settings.handoffRise()        return handoff.HANDOFF_RISE or 0 end
+function settings.handoffDistance()    return handoff.HANDOFF_DISTANCE or 0 end
+
+function settings.reticleIcon()        return reticle.RETICLE_ICON end
+function settings.reticleIdleSize()    return reticle.RETICLE_IDLE_SIZE end
+function settings.reticleMinSize()     return reticle.RETICLE_MIN_SIZE end
+function settings.reticleMaxSize()     return reticle.RETICLE_MAX_SIZE end
+function settings.reticleMinDistance()  return reticle.RETICLE_MIN_DISTANCE end
+function settings.reticleMaxDistance()  return reticle.RETICLE_MAX_DISTANCE end
+function settings.lockAnimation()      return reticle.ENABLE_LOCK_ANIMATION end
 
 -- Color for a target type
 local COLOR_KEYS = {
@@ -384,16 +463,16 @@ local COLOR_KEYS = {
 function settings.color(targetType)
     local key = COLOR_KEYS[targetType or "none"]
     if key then
-        return colorSection:get(key)
+        return colors[key]
     end
-    return colorSection:get("COLOR_NO_TARGET")
+    return colors.COLOR_NO_TARGET
 end
 
 -- ==============================================
 -- DEBUG PRINT
 -- ==============================================
 function settings.debugPrint(...)
-    if basicSection:get("DEBUG_MODE") then
+    if basic.DEBUG_MODE then
         print("[HOOKSHOT DEBUG]", ...)
     end
 end
