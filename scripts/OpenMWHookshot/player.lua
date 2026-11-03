@@ -66,6 +66,15 @@ local RAYCAST_THROTTLE = 3          -- Only raycast every N frames for targeting
 -- Falling pose played on a hooked actor while it is dragged in. Duration is a
 -- failsafe: the actor script cancels on its own, so a dead player script cannot
 -- leave an NPC stuck in the pose.
+-- Tether and swing tuning that is not worth a setting.
+local TETHER_MIN_LENGTH = 120        -- Never ratchet below this, or the rope locks you in place
+local SWING_DAMPING = 0.35           -- Per-second angular damping
+local SWING_MIN_OMEGA = 0.25         -- Below this at the bottom the swing just hangs
+local SWING_RELEASE_PAST = 0.20      -- Radians past the low point before release
+local SWING_MAX_TIME = 6.0           -- Failsafe
+local LAUNCH_TIMEOUT = 2.5
+local DART_MIN_MOVE = 2.0
+
 local HOOKED_ACTOR_EVENT = "Dubious_HookShot_ActorHooked"
 local ACTOR_FALL_DURATION = 1.5
 
@@ -86,6 +95,7 @@ local ROPE_PHASE_OUTBOUND = "OUTBOUND"
 local ROPE_PHASE_SELF_PULL = "SELF_PULL"
 local ROPE_PHASE_TARGET_PULL = "TARGET_PULL"
 local ROPE_PHASE_HANGING = "HANGING"
+local ROPE_PHASE_TETHER = "TETHER"
 
 -- ==============================================
 -- STATE MANAGEMENT
@@ -95,6 +105,9 @@ local HookshotState = {
     DRAWN = "DRAWN",
     FIRING = "FIRING",
     HANDOFF = "HANDOFF",      -- Drag released; engine movement covers the last stretch
+    TETHERED = "TETHERED",    -- Delayed firing: dart planted, rope held, player free
+    SWINGING = "SWINGING",    -- Powered pendulum on a tethered rappel anchor
+    LAUNCH = "LAUNCH",        -- Ballistic arc out of a swing release
     LANDING = "LANDING",
     HANGING = "HANGING",
     ITEM_MENU = "ITEM_MENU",  -- New state for item interaction menu
@@ -152,6 +165,26 @@ local state = {
         ragdoll = nil,        -- Reference to the ragdoll data for this item
     },
 
+    -- Delayed firing. length ratchets down to the closest approach, so moving
+    -- in shortens the rope and brings the break point with it.
+    tether = {
+        anchor = nil,
+        length = 0,
+        rappelAnchor = false,
+    },
+
+    -- Pendulum in the vertical plane through the anchor. theta is measured from
+    -- straight down, right is the in-plane horizontal unit vector.
+    swing = {
+        anchor = nil,
+        radius = 0,
+        theta = 0,
+        omega = 0,
+        right = nil,
+        pastBottom = 0,
+        levitationApplied = false,
+    },
+
     -- Runtime only; save/load cancels an in-flight hook.
     rope = {
         active = false,
@@ -162,6 +195,7 @@ local state = {
         target = nil,
         targetOffset = nil,
         pullsTarget = false,
+        delayed = false,
         hitNormal = nil,
         approachDir = nil,
         playerYaw = nil,
@@ -223,6 +257,48 @@ local function ropeShoulderOrigin()
         or (self.position + util.vector3(0, 0, U.PLAYER_HEIGHT * 0.81))
 end
 
+local dartLastPos = nil
+
+-- The dart is an ordinary object the global script moves, because no Lua call
+-- launches a projectile. It rides the same point the rope's far end is at.
+local function publishDart(tipPosition, fromPosition)
+    if not settings.dartVisible() then return end
+
+    local to = copyVector3(tipPosition)
+    if not to then return end
+
+    if dartLastPos then
+        local dx, dy, dz = to.x - dartLastPos.x, to.y - dartLastPos.y, to.z - dartLastPos.z
+        if (dx * dx + dy * dy + dz * dz) <= (DART_MIN_MOVE * DART_MIN_MOVE) then return end
+    end
+    dartLastPos = to
+
+    -- Point it along the rope. Sign of the pitch term is unverified in game.
+    local rotation = nil
+    local from = fromPosition and copyVector3(fromPosition)
+    if from then
+        local dir = to - from
+        local flat = util.vector3(dir.x, dir.y, 0):length()
+        if flat > 0.01 or math.abs(dir.z) > 0.01 then
+            local yaw = math.atan2(dir.x, dir.y)
+            local pitch = -math.atan2(dir.z, flat)
+            rotation = util.transform.rotateZ(yaw) * util.transform.rotateX(pitch)
+        end
+    end
+
+    core.sendGlobalEvent('HookshotDartUpdate', {
+        owner = self.object,
+        pos = to,
+        rotation = rotation,
+    })
+end
+
+local function endDart()
+    if dartLastPos == nil then return end
+    dartLastPos = nil
+    core.sendGlobalEvent('HookshotDartEnd', { owner = self.object })
+end
+
 local function clearRopeState()
     local rope = state.rope
     rope.active = false
@@ -233,6 +309,7 @@ local function clearRopeState()
     rope.target = nil
     rope.targetOffset = nil
     rope.pullsTarget = false
+    rope.delayed = false
     rope.hitNormal = nil
     rope.approachDir = nil
     rope.playerYaw = nil
@@ -249,19 +326,23 @@ local function endActiveRope()
             endRope()
         end
     end
+    endDart()
     clearRopeState()
 end
 
+-- The dart is published before the beam interface is consulted: it is a real
+-- object, so it must not depend on the optional rope visual being installed.
 local function publishRope(endPosition)
     if not state.rope.active then return end
-
-    local updateRope = ropeInterfaceMethod("updateRope")
-    if not updateRope then return end
 
     local from = ropeShoulderOrigin()
     local to = copyVector3(endPosition)
     if not from or not to then return end
 
+    publishDart(to, from)
+
+    local updateRope = ropeInterfaceMethod("updateRope")
+    if not updateRope then return end
     updateRope(from, to)
 end
 
@@ -310,6 +391,7 @@ local function beginHookTravel(spec)
     rope.target = spec.target
     rope.targetOffset = targetOffset
     rope.pullsTarget = spec.pullsTarget or false
+    rope.delayed = spec.delayed or false
     rope.hitNormal = spec.hitNormal
     rope.approachDir = approachDir
     rope.playerYaw = spec.playerYaw
@@ -328,9 +410,11 @@ local function updateActiveRope(deltaSeconds)
     local rope = state.rope
     if not rope.active then return end
 
-    -- Fail-safe: only FIRING and HANGING keep a rope.
+    -- Fail-safe: only these states keep a rope.
     if state.mode ~= HookshotState.FIRING
         and state.mode ~= HookshotState.HANGING
+        and state.mode ~= HookshotState.TETHERED
+        and state.mode ~= HookshotState.SWINGING
     then
         endActiveRope()
         return
@@ -400,10 +484,12 @@ end
 local function setMode(newMode)
     if state.mode == newMode then return end
 
-    -- The rope survives only while FIRING or HANGING.
+    -- The rope survives only while firing, hanging or tethered.
     if state.rope.active
         and newMode ~= HookshotState.FIRING
         and newMode ~= HookshotState.HANGING
+        and newMode ~= HookshotState.TETHERED
+        and newMode ~= HookshotState.SWINGING
     then
         endActiveRope()
     end
@@ -686,6 +772,12 @@ local function handleSequenceCompletion(event)
         terminateHook(ragdoll)
         -- Actor pulls: drop the rope before ALL_COMPLETE.
         endActiveRope()
+
+    elseif event.type == "LAUNCH_COMPLETE" then
+        debugPrint("Launch arc complete - entering LANDING")
+        setMode(HookshotState.LANDING)
+        state.landing.timeRemaining = LANDING_DURATION
+        state.landing.targetYaw = nil
 
     elseif event.type == "ALL_COMPLETE" then
         if state.mode == HookshotState.FIRING then
@@ -1001,6 +1093,243 @@ end
 -- ==============================================
 -- ON_UPDATE LOGIC
 -- ==============================================
+
+-- ==============================================
+-- TETHER AND SWING
+-- ==============================================
+local SWING_GRAVITY = 9.80665 * 400
+
+local function applySwingLevitation()
+    if state.swing.levitationApplied then return end
+    local fx = types.Actor.activeEffects(self)
+    if not fx then return end
+    fx:modify(RAPPEL_LEVITATION_MAGNITUDE, core.magic.EFFECT_TYPE.Levitate)
+    state.swing.levitationApplied = true
+end
+
+local function clearSwingLevitation()
+    if not state.swing.levitationApplied then return end
+    state.swing.levitationApplied = false
+    local fx = types.Actor.activeEffects(self)
+    if fx then
+        fx:modify(-RAPPEL_LEVITATION_MAGNITUDE, core.magic.EFFECT_TYPE.Levitate)
+    end
+end
+
+local function clearTetherState()
+    state.tether.anchor = nil
+    state.tether.length = 0
+    state.tether.rappelAnchor = false
+    state.tether.prevPos = nil
+    state.swing.anchor = nil
+    state.swing.right = nil
+    state.swing.radius = 0
+    state.swing.theta = 0
+    state.swing.omega = 0
+    state.swing.elapsed = 0
+    state.swing.armed = false
+end
+
+local function breakTether(reason)
+    debugPrint("Tether broken:", reason or "unknown")
+    clearSwingLevitation()
+    clearTetherState()
+    ambient.stopSoundFile(settings.sounds.fire)
+    ambient.playSoundFile(settings.sounds.toggle)
+    -- IDLE is not in setMode's keep-list, so this retracts the rope and dart.
+    setMode(HookshotState.IDLE)
+end
+
+local function beginTether(anchorPos, rappelEligible)
+    local anchor = copyVector3(anchorPos)
+    if not anchor then return false end
+
+    local dist = (self.position - anchor):length()
+    state.tether.anchor = anchor
+    state.tether.length = math.max(dist, TETHER_MIN_LENGTH)
+    state.tether.rappelAnchor = rappelEligible and true or false
+    state.tether.prevPos = self.position
+
+    state.rope.phase = ROPE_PHASE_TETHER
+    setMode(HookshotState.TETHERED)
+    ui.showMessage("Rope attached - fire again to reel in")
+    debugPrint("Tethered at length", state.tether.length,
+               "rappelAnchor =", tostring(state.tether.rappelAnchor))
+    return true
+end
+
+local function beginLaunch(velocity)
+    clearSwingLevitation()
+    clearTetherState()
+    endActiveRope()
+    Physics.removeByTarget(self)
+    Physics.addRagdoll(Physics.createRagdollData(
+        self,
+        Physics.getBoundingData(self),
+        { Physics.createLaunchSequence(velocity, LAUNCH_TIMEOUT) }
+    ))
+    setMode(HookshotState.LAUNCH)
+    debugPrint("Launched at", velocity:length())
+end
+
+-- Offset from the anchor for a pendulum angle measured from straight down.
+local function swingOffset(right, radius, theta)
+    return right * (radius * math.sin(theta))
+         + util.vector3(0, 0, -radius * math.cos(theta))
+end
+
+local function releaseSwing()
+    local sw = state.swing
+    if not sw.right then
+        breakTether("swing_without_plane")
+        return
+    end
+
+    -- Tangent is the derivative of the offset in theta, signed by travel.
+    local tangent = sw.right * math.cos(sw.theta)
+                  + util.vector3(0, 0, math.sin(sw.theta))
+    if sw.omega < 0 then tangent = tangent * -1 end
+
+    local flat = util.vector3(tangent.x, tangent.y, 0)
+    if flat:length() < 0.01 then flat = sw.right end
+    flat = flat:normalize()
+
+    beginLaunch(flat * settings.swingSpeed()
+                + util.vector3(0, 0, settings.swingBoost()))
+end
+
+local function beginSwing()
+    local anchor = state.tether.anchor
+    if not anchor then return end
+
+    local toPlayer = self.position - anchor
+    local radius = toPlayer:length()
+    if radius < TETHER_MIN_LENGTH then return end
+
+    -- The swing plane is the vertical plane through the anchor and the player.
+    local flat = util.vector3(toPlayer.x, toPlayer.y, 0)
+    if flat:length() < 1 then
+        local yaw = camera.getYaw()
+        flat = util.vector3(math.sin(yaw), math.cos(yaw), 0)
+    end
+    local right = flat:normalize()
+
+    local below = math.max(-toPlayer.z, 0.001)
+    local side = toPlayer:dot(right)
+
+    local sw = state.swing
+    sw.anchor = anchor
+    sw.radius = radius
+    sw.right = right
+    sw.theta = math.atan2(side, below)
+    sw.elapsed = 0
+    sw.armed = false
+
+    -- Seed from the motion the player already had, so running off a ledge
+    -- carries into the arc instead of starting from rest. No velocity getter,
+    -- so this is differenced from the previous tethered position.
+    sw.omega = 0
+    local prev = state.tether.prevPos
+    if prev then
+        local moved = self.position - prev
+        local tangent = right * math.cos(sw.theta)
+                      + util.vector3(0, 0, math.sin(sw.theta))
+        sw.omega = moved:dot(tangent) / radius
+    end
+
+    applySwingLevitation()
+    setMode(HookshotState.SWINGING)
+    debugPrint("Swing begun radius", radius, "theta", sw.theta, "omega", sw.omega)
+end
+
+local function updateSwingState(deltaSeconds)
+    if state.mode ~= HookshotState.SWINGING then return end
+
+    local sw = state.swing
+    if not sw.anchor or not sw.right then
+        breakTether("swing_state_lost")
+        return
+    end
+
+    -- Position-driven, so player input must not fight it.
+    self.controls.movement = 0
+    self.controls.sideMovement = 0
+    self.controls.jump = false
+
+    sw.elapsed = sw.elapsed + deltaSeconds
+    if sw.elapsed > SWING_MAX_TIME then
+        releaseSwing()
+        return
+    end
+
+    local alpha = -(SWING_GRAVITY / sw.radius) * math.sin(sw.theta)
+                  - SWING_DAMPING * sw.omega
+    sw.omega = sw.omega + alpha * deltaSeconds
+
+    local prevTheta = sw.theta
+    sw.theta = sw.theta + sw.omega * deltaSeconds
+
+    -- Arm the release on the pass through the low point, but only with enough
+    -- speed to be worth launching; otherwise let it keep swinging.
+    if prevTheta * sw.theta <= 0 and math.abs(sw.omega) >= SWING_MIN_OMEGA then
+        sw.armed = true
+    end
+
+    if sw.armed and math.abs(sw.theta) >= SWING_RELEASE_PAST then
+        releaseSwing()
+        return
+    end
+
+    local newPos = sw.anchor + swingOffset(sw.right, sw.radius, sw.theta)
+
+    local blocked = nearby.castRay(self.position, newPos, {
+        collisionType = HOOKSHOT_PHY,
+        ignore = self,
+    })
+    if blocked.hit then
+        debugPrint("Swing hit geometry - releasing")
+        releaseSwing()
+        return
+    end
+
+    core.sendGlobalEvent('ragdollTeleport', { object = self.object, newPos = newPos })
+end
+
+local function updateTetherState(deltaSeconds)
+    if state.mode ~= HookshotState.TETHERED then return end
+
+    local anchor = state.tether.anchor
+    if not anchor then
+        breakTether("no_anchor")
+        return
+    end
+
+    local dist = (self.position - anchor):length()
+
+    -- Ratchet: the closest approach becomes the new length, so moving in
+    -- shortens the rope and brings the break point with it.
+    if dist < state.tether.length then
+        state.tether.length = math.max(dist, TETHER_MIN_LENGTH)
+        debugPrint("Tether shortened to", state.tether.length)
+    end
+
+    if dist > state.tether.length + settings.tetherGrace() then
+        ui.showMessage("The rope snaps!")
+        breakTether("overextended")
+        return
+    end
+
+    if settings.swingEnabled()
+        and state.tether.rappelAnchor
+        and not types.Actor.isOnGround(self)
+    then
+        beginSwing()
+        return
+    end
+
+    state.tether.prevPos = self.position
+end
+
 local function onUpdate(deltaSeconds)
     if pendingAnimReset then
         pendingAnimReset = false
@@ -1014,6 +1343,8 @@ local function onUpdate(deltaSeconds)
     end
 
     updateHandoffState(deltaSeconds)
+    updateTetherState(deltaSeconds)
+    updateSwingState(deltaSeconds)
     updateLandingState(deltaSeconds)
     updateHangingState(deltaSeconds)
     updateActiveRope(deltaSeconds)
@@ -1026,7 +1357,8 @@ local function onSave()
         version = 1,
         combatControlsSuppressed = state.ownedOverrides.combatControlsSuppressed,
         movementControlsOverridden = state.ownedOverrides.movementControlsOverridden,
-        levitationApplied = state.hanging.levitationApplied,
+        levitationApplied = state.hanging.levitationApplied
+            or state.swing.levitationApplied,
         animationActive = Anim.isActive(),
         crosshairHidden = Reticle:isVisible(),
     }
@@ -1042,6 +1374,7 @@ local function onLoad(savedData)
         or state.ownedOverrides.movementControlsOverridden
     local removeLevitation = saved.levitationApplied == true
         or state.hanging.levitationApplied
+        or state.swing.levitationApplied
     local resetAnimation = saved.animationActive == true or Anim.isActive()
     local restoreCrosshair = saved.crosshairHidden == true or Reticle:isVisible()
 
@@ -1054,6 +1387,8 @@ local function onLoad(savedData)
         end
     end
     state.hanging.levitationApplied = false
+    state.swing.levitationApplied = false
+    clearTetherState()
 
     if restoreMovementControls then
         setMovementControlsOverridden(false)
@@ -1182,6 +1517,17 @@ attachTravelingHook = function(anchor)
         return
     end
 
+    if rope.delayed then
+        local surfaceType = orient.classifySurface(rope.hitNormal)
+        local rappelEligible = rope.hitNormal
+            and Targeting.checkRappelClearance(attachedPosition, rope.hitNormal)
+            and Targeting.checkLedgeEdge(attachedPosition, rope.hitNormal,
+                                         rope.cameraPos, rope.cameraPitch, surfaceType)
+        if beginTether(attachedPosition, rappelEligible) then return end
+        abortActiveHook("tether_failed")
+        return
+    end
+
     rope.phase = ROPE_PHASE_SELF_PULL
     debugPrint("Hook attached - pulling player to world")
     if not hookToWorldObject(
@@ -1193,6 +1539,32 @@ attachTravelingHook = function(anchor)
         rope.cameraPitch
     ) then
         abortActiveHook("self_pull_failed")
+    end
+end
+
+-- Second fire press: stop holding and reel in from wherever the rope now is.
+local function retractTether()
+    local anchor = state.tether.anchor
+    if not anchor then return end
+
+    local rope = state.rope
+    clearSwingLevitation()
+    clearTetherState()
+
+    rope.phase = ROPE_PHASE_SELF_PULL
+    setMode(HookshotState.FIRING)
+    ambient.playSoundFile(settings.sounds.fire)
+    debugPrint("Tether retracting")
+
+    if not hookToWorldObject(
+        anchor,
+        rope.hitNormal,
+        rope.approachDir,
+        rope.playerYaw,
+        rope.cameraPos,
+        rope.cameraPitch
+    ) then
+        abortActiveHook("tether_retract_failed")
     end
 end
 
@@ -1268,8 +1640,13 @@ local function fireHookshot()
         debugPrint("Surface type:", surfaceType, "Normal:", orient.normalToString(hitNormal))
     end
 
+    -- Delayed firing is for world geometry: a dart planted in a moving actor
+    -- is a different feature.
+    local delayed = settings.delayedFiring() and not pullsTarget
+
     local travelStarted = beginHookTravel({
         target = target,
+        delayed = delayed,
         hitPosition = hitPos,
         hitNormal = hitNormal,
         approachDir = approachDir,
@@ -1293,6 +1670,10 @@ local function fireHookshot()
 end
 
 local function trySheathHookshot()
+    if state.mode == HookshotState.TETHERED or state.mode == HookshotState.SWINGING then
+        breakTether("sheathed")
+        return
+    end
     if state.mode ~= HookshotState.DRAWN then return end
 
     ambient.playSoundFile(settings.sounds.toggle)
@@ -1315,6 +1696,9 @@ local function tryActivateHookshot()
         debugPrint("Mode is IDLE - drawing hookshot (grapple =", tostring(caps.grapple),
                    "item =", tostring(caps.item), "npc =", tostring(caps.npc), ")")
         drawHookshot()
+    elseif state.mode == HookshotState.TETHERED or state.mode == HookshotState.SWINGING then
+        debugPrint("Mode is", state.mode, "- cutting the tether")
+        trySheathHookshot()
     elseif state.mode == HookshotState.HANGING then
         debugPrint("Mode is HANGING - cannot use hookshot while hanging")
         ui.showMessage("Release from hang first (Space)")
@@ -1341,9 +1725,17 @@ end))
 
 -- Fire on the Attack/Use action; called on change, so once per press.
 input.registerActionHandler('Use', async:callback(function(value)
-    if value and state.mode == HookshotState.DRAWN then
+    if not value then return end
+
+    if state.mode == HookshotState.DRAWN then
         debugPrint("Use (Attack) pressed while DRAWN - firing hookshot")
         fireHookshot()
+    elseif state.mode == HookshotState.TETHERED then
+        debugPrint("Use (Attack) pressed while TETHERED - reeling in")
+        retractTether()
+    elseif state.mode == HookshotState.SWINGING then
+        debugPrint("Use (Attack) pressed while SWINGING - releasing early")
+        releaseSwing()
     end
 end))
 

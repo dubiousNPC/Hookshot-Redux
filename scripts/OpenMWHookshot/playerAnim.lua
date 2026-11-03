@@ -219,9 +219,15 @@ function Anim.onStateChange(newState, oldState, hookshotState)
         local targetType = targeting and targeting.lastTargetType
         playLoop(FIRING_GROUPS[targetType] or FIRING_GROUPS.default)
 
-    elseif newState == "HANDOFF" then
-        -- Upper body: the player is really moving during the handoff.
+    elseif newState == "HANDOFF" or newState == "LAUNCH" then
+        -- Upper body: the player is really moving during both.
         playLoopAlt(GROUPS.HANDOFF)
+
+    elseif newState == "TETHERED" then
+        playLoop(GROUPS.HANG_IDLE)
+
+    elseif newState == "SWINGING" then
+        playLoop(GROUPS.HANG_DOWN)
 
     elseif newState == "HANGING" then
         local hangingData = hookshotState and hookshotState.hanging

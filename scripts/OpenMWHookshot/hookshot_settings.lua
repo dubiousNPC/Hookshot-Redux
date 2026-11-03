@@ -404,6 +404,37 @@ interfaces.Settings.registerGroup {
 }
 local gateSection = storage.playerSection("Settings_OpenMW_Hookshot_Gates")
 
+-- ==============================================
+-- TETHER SETTINGS
+-- ==============================================
+interfaces.Settings.registerGroup {
+    key = "Settings_OpenMW_Hookshot_Tether",
+    page = "OpenMWHookshotPg",
+    l10n = "OpenMWHookshot",
+    name = "Tether",
+    description = "Delayed firing leaves the dart planted and the rope attached until you press fire again.",
+    permanentStorage = true,
+    order = 6,
+    settings = {
+        { key = "DELAYED_FIRING", renderer = "checkbox", name = "Delayed Firing", default = false,
+          description = 'Firing at world geometry plants the dart and holds the rope instead of pulling you in. Press fire again to reel in.' },
+        { key = "TETHER_GRACE", renderer = "number", name = "Break Distance", default = 120,
+          argument = { min = 20, max = 600, integer = true },
+          description = 'How far past the current rope length you can get before the rope snaps, in game units.' },
+        { key = "SWING_ENABLED", renderer = "checkbox", name = "Swing", default = true,
+          description = 'Leaving the ground on a tether anchored to a rappel point starts a powered swing that releases past the low point.' },
+        { key = "SWING_SPEED", renderer = "number", name = "Swing Release Speed", default = 700,
+          argument = { min = 200, max = 2000, integer = true },
+          description = 'Horizontal speed carried out of a swing release, in units per second.' },
+        { key = "SWING_BOOST", renderer = "number", name = "Swing Jump Boost", default = 450,
+          argument = { min = 0, max = 1500, integer = true },
+          description = 'Upward speed added at swing release, in units per second. 0 releases flat.' },
+        { key = "DART_VISIBLE", renderer = "checkbox", name = "Show Dart", default = true,
+          description = 'Draw the hook dart object at the rope tip. Turn off if another mod conflicts.' },
+    }
+}
+local tetherSection = storage.playerSection("Settings_OpenMW_Hookshot_Tether")
+
 local EMPTY_SET = {}
 
 -- ==============================================
@@ -418,6 +449,7 @@ local basic = settingsCache.new(basicSection, async)
 local reticle = settingsCache.new(reticleSection, async)
 local colors = settingsCache.new(colorSection, async)
 local handoff = settingsCache.new(handoffSection, async)
+local tether = settingsCache.new(tetherSection, async)
 
 -- ==============================================
 -- REACTIVE ACCESSORS
@@ -437,6 +469,13 @@ function settings.rappelClimbSpeed()   return basic.RAPPEL_CLIMB_SPD end
 function settings.rappelFunMode()      return basic.RAPPEL_FUN_MODE end
 function settings.minRappelClearance() return basic.MIN_RAPPEL_CLEARANCE end
 function settings.debugMode()          return basic.DEBUG_MODE end
+
+function settings.delayedFiring()      return tether.DELAYED_FIRING == true end
+function settings.tetherGrace()        return tether.TETHER_GRACE or 120 end
+function settings.swingEnabled()       return tether.SWING_ENABLED ~= false end
+function settings.swingSpeed()         return tether.SWING_SPEED or 700 end
+function settings.swingBoost()         return tether.SWING_BOOST or 450 end
+function settings.dartVisible()        return tether.DART_VISIBLE ~= false end
 
 function settings.handoffRise()        return handoff.HANDOFF_RISE or 0 end
 function settings.handoffDistance()    return handoff.HANDOFF_DISTANCE or 0 end

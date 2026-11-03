@@ -30,7 +30,7 @@ There is no build system. This is a pure Lua mod loaded by OpenMW at runtime.
 
 ### Module Responsibilities
 
-**player.lua** — State machine (`IDLE → DRAWN → FIRING → HANDOFF/LANDING/HANGING → IDLE`, plus `ITEM_MENU`), hook travel and rope, hanging/rappel, input handlers, save/load cleanup.
+**player.lua** — State machine (`IDLE → DRAWN → FIRING → HANDOFF/TETHERED/SWINGING/LAUNCH/LANDING/HANGING → IDLE`, plus `ITEM_MENU`), hook travel, rope and dart, tether and swing, hanging/rappel, input handlers, save/load cleanup.
 
 **hookshot_physics.lua** — Ragdoll sequences, collision-aware teleport, physics tick. Returns completion events to player.lua.
 

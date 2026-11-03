@@ -1,7 +1,58 @@
 ---@omw-context global
 
 local types = require('openmw.types')
+local world = require('openmw.world')
 local I = require('openmw.interfaces')
+
+-- ==============================================
+-- HOOK DART
+-- ==============================================
+-- There is no Lua call to launch a projectile, so the dart is an ordinary
+-- object this script moves. One per player, created on the first update and
+-- removed on the last; saveState is cleared so it never enters a save.
+local DART_RECORD = "dbs_hookshot_dart"
+local darts = setmetatable({}, { __mode = "k" })
+
+local function dartFor(owner, cell, pos, rotation)
+    local dart = darts[owner]
+    if dart and not dart:isValid() then
+        darts[owner] = nil
+        dart = nil
+    end
+
+    if not dart then
+        dart = world.createObject(DART_RECORD)
+        if not dart then return nil end
+        darts[owner] = dart
+    end
+
+    if rotation then
+        dart:teleport(cell, pos, rotation)
+    else
+        dart:teleport(cell, pos)
+    end
+    dart.saveState = false
+    return dart
+end
+
+local function dartUpdateHandler(data)
+    if not data or not data.owner or not data.pos then return end
+    if not data.owner:isValid() then return end
+
+    local cell = data.owner.cell
+    if not cell then return end
+
+    dartFor(data.owner, cell.name, data.pos, data.rotation)
+end
+
+local function dartEndHandler(data)
+    if not data or not data.owner then return end
+    local dart = darts[data.owner]
+    darts[data.owner] = nil
+    if dart and dart:isValid() then
+        dart:remove()
+    end
+end
 
 local function teleportHandler(data)
     if not data.object or not data.newPos then
@@ -77,6 +128,8 @@ end
 return {
     eventHandlers = {
         ragdollTeleport = teleportHandler,
-        HookshotInventoryAction = inventoryActionHandler
+        HookshotInventoryAction = inventoryActionHandler,
+        HookshotDartUpdate = dartUpdateHandler,
+        HookshotDartEnd = dartEndHandler,
     }
 }

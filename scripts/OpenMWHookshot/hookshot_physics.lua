@@ -87,6 +87,19 @@ function Physics.createSelfPullSequence(targetPos, speed, timeout, landingData, 
     }
 end
 
+-- A DROP with an initial velocity: a ballistic launch through the same
+-- gravity integrator and collision cage.
+function Physics.createLaunchSequence(velocity, timeout)
+    return {
+        type = "LAUNCH",
+        v = velocity,
+        timeout = timeout or MAX_TIMEOUT,
+        applyG = true,
+        contOnHit = false,
+        contToTime = false,
+    }
+end
+
 function Physics.createDropSequence(timeout)
     return {
         type = "DROP",
@@ -312,6 +325,8 @@ local function completeCurrentSequence(ragdoll)
             landingData = currentSeq.landingData,
             handoff = currentSeq.handoffVector,
         }
+    elseif currentSeq.type == "LAUNCH" then
+        event = { type = "LAUNCH_COMPLETE", ragdoll = ragdoll }
     else
         event = { type = "SEQUENCE_COMPLETE", ragdoll = ragdoll }
     end
