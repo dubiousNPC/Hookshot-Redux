@@ -12,7 +12,16 @@ There is no build system. This is a pure Lua mod loaded by OpenMW at runtime.
 
 - **Install:** Add the mod folder to OpenMW's data directories in `openmw.cfg`
 - **Reload during development:** Run `reloadlua` in the OpenMW in-game console (F2) to hot-reload scripts
-- **No unit test framework** — all testing is manual in-game
+- **Tests** (off-engine, against `tests/omwstub.lua`):
+  - `tests/gate_test.lua <hookshot_settings.lua>` — equipment gate matrix
+  - `tests/tether_test.lua <omwstub.lua> <player.lua>` — tether, ratchet, swing, reel-in, sheath
+  - `tests/tether_edge_test.lua <omwstub.lua> <player.lua>` — overhead anchor, run-off momentum, jump-vs-ledge
+  - `tests/flow_yield_test.lua <omwstub.lua> <player.lua>` — Parkourwind FLOW stood down for pull/swing/hang, yield before the override write
+  - Run them under **LuaJIT**, which is what OpenMW runs (Lua 5.1 semantics), not only under
+    `tests/runlua.py` (Lua 5.4): e.g. `math.atan(y, x)` ignores its second argument in LuaJIT.
+    OpenMW's LuaJIT has Lua 5.2 compat (`table.move`, `table.unpack` exist; `math.type`, `bit`, `load` do not).
+- The stub cannot catch engine-side API errors (e.g. writing a read-only property); those need an
+  in-engine run.
 
 ## Architecture
 

@@ -9,7 +9,15 @@ local I = require('openmw.interfaces')
 -- ==============================================
 -- There is no Lua call to launch a projectile, so the dart is an ordinary
 -- object this script moves. One per player, created on the first update and
--- removed on the last; saveState is cleared so it never enters a save.
+-- removed on the last.
+--
+-- KEPT OUT OF SAVES BY HAND. This used to set `dart.saveState = false`, which
+-- is not a property in OpenMW 0.52: the write raised "sol: cannot write to a
+-- readonly property" on EVERY update (after the teleport, so the dart still
+-- moved, with an error per frame in the log). Nothing in the Lua API stops an
+-- object being saved, so a save taken while tethered stored the dart and the
+-- load left it hanging in the world. Instead the live darts go into this
+-- script's own save data and are removed on load.
 local DART_RECORD = "dbs_hookshot_dart"
 local darts = setmetatable({}, { __mode = "k" })
 
@@ -31,7 +39,6 @@ local function dartFor(owner, cell, pos, rotation)
     else
         dart:teleport(cell, pos)
     end
-    dart.saveState = false
     return dart
 end
 
@@ -125,7 +132,27 @@ local function inventoryActionHandler(data)
     end
 end
 
+-- A dart in flight or planted at save time is stored with the save like any
+-- object; remove it on load, since the tether that owned it is not restored.
+local function onSave()
+    local live = {}
+    for _, dart in pairs(darts) do
+        if dart:isValid() then live[#live + 1] = dart end
+    end
+    return { darts = live }
+end
+
+local function onLoad(data)
+    for _, dart in ipairs(data and data.darts or {}) do
+        if dart:isValid() then dart:remove() end
+    end
+end
+
 return {
+    engineHandlers = {
+        onSave = onSave,
+        onLoad = onLoad,
+    },
     eventHandlers = {
         ragdollTeleport = teleportHandler,
         HookshotInventoryAction = inventoryActionHandler,

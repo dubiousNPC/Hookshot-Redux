@@ -72,6 +72,11 @@ local SWING_DAMPING = 0.35           -- Per-second angular damping
 local SWING_MIN_OMEGA = 0.25         -- Below this at the bottom the swing just hangs
 local SWING_RELEASE_PAST = 0.20      -- Radians past the low point before release
 local SWING_MAX_TIME = 6.0           -- Failsafe
+-- How far below the last ground the player must be before a swing starts.
+-- isOnGround alone is also false for an ordinary jump, and a jump under the
+-- anchor became a 6 s pendulum hang ending in a launch. A jump comes back down
+-- to the height it left; a ledge does not. 40 is reached ~0.14 s into a fall.
+local SWING_START_DROP = 40
 local LAUNCH_TIMEOUT = 2.5
 local DART_MIN_MOVE = 2.0
 
@@ -171,6 +176,7 @@ local state = {
         anchor = nil,
         length = 0,
         rappelAnchor = false,
+        groundZ = nil,      -- height of the last ground stood on while tethered
     },
 
     -- Pendulum in the vertical plane through the anchor. theta is measured from
@@ -475,7 +481,51 @@ local function setCombatControlsSuppressed(suppressed)
     state.ownedOverrides.combatControlsSuppressed = suppressed
 end
 
+-- ==============================================
+-- PARKOURWIND FLOW
+-- ==============================================
+-- FLOW reads any not-grounded player as mid-jump, and while the hookshot
+-- carries, swings or hangs the player that is all FLOW sees. Unasked it ran
+-- its airborne ladder on them: the Jump that drops a hang chained into a FLOW
+-- ledge grab, a long pull played Skydive and landed as a knockdown over the
+-- LANDING pose. I.Flow.yield stands FLOW down while the hookshot holds the
+-- player; absent FLOW, nothing happens.
+--
+-- Not TETHERED: the dart is planted but the player walks, jumps and vaults
+-- freely, so FLOW is welcome there.
+local FLOW_OWNER = 'Hookshot'
+local FLOW_HOLDING = {
+    [HookshotState.HANDOFF] = true, [HookshotState.SWINGING] = true,
+    [HookshotState.LAUNCH] = true,  [HookshotState.LANDING] = true,
+    [HookshotState.HANGING] = true,
+}
+local flowYielded = false
+
+local function holdsPlayer()
+    if FLOW_HOLDING[state.mode] then return true end
+    -- FIRING covers a pull of an item toward a standing player too; only a
+    -- self-pull moves the player.
+    if state.mode == HookshotState.FIRING and state.rope.phase == ROPE_PHASE_SELF_PULL then
+        return true
+    end
+    return state.ownedOverrides.movementControlsOverridden == true
+end
+
+-- `taking` forces a yield ahead of a hold that holdsPlayer cannot see yet:
+-- the override write below. Idempotent, so it is called freely.
+local function syncFlowYield(taking)
+    local want = taking == true or holdsPlayer()
+    if want == flowYielded then return end
+    flowYielded = want
+    local F = I.Flow
+    if not (F and F.yield and F.resume) then return end
+    if want then F.yield(FLOW_OWNER) else F.resume(FLOW_OWNER) end
+end
+
 local function setMovementControlsOverridden(overridden)
+    -- BEFORE the write: the flag is shared, FLOW releases its own hold on it
+    -- as it stands down, and that release must not land after ours.
+    if overridden then syncFlowYield(true) end
     Controls.overrideMovementControls(overridden)
     state.ownedOverrides.movementControlsOverridden = overridden
 end
@@ -496,6 +546,7 @@ local function setMode(newMode)
 
     local oldMode = state.mode
     state.mode = newMode
+    syncFlowYield()
     Anim.onStateChange(newMode, oldMode, state)
 
     -- Fire shares the Attack key, so combat is suppressed from DRAWN until IDLE.
@@ -1121,6 +1172,7 @@ local function clearTetherState()
     state.tether.length = 0
     state.tether.rappelAnchor = false
     state.tether.prevPos = nil
+    state.tether.groundZ = nil
     state.swing.anchor = nil
     state.swing.right = nil
     state.swing.radius = 0
@@ -1149,6 +1201,7 @@ local function beginTether(anchorPos, rappelEligible)
     state.tether.length = math.max(dist, TETHER_MIN_LENGTH)
     state.tether.rappelAnchor = rappelEligible and true or false
     state.tether.prevPos = self.position
+    state.tether.groundZ = self.position.z
 
     state.rope.phase = ROPE_PHASE_TETHER
     setMode(HookshotState.TETHERED)
@@ -1198,7 +1251,7 @@ local function releaseSwing()
                 + util.vector3(0, 0, settings.swingBoost()))
 end
 
-local function beginSwing()
+local function beginSwing(deltaSeconds)
     local anchor = state.tether.anchor
     if not anchor then return end
 
@@ -1227,14 +1280,16 @@ local function beginSwing()
 
     -- Seed from the motion the player already had, so running off a ledge
     -- carries into the arc instead of starting from rest. No velocity getter,
-    -- so this is differenced from the previous tethered position.
+    -- so this is differenced from the previous tethered position -- which is
+    -- one FRAME of travel, so it is divided by the frame time to make a
+    -- velocity. Without that the carried speed was 1/60th of the run's at 60fps.
     sw.omega = 0
     local prev = state.tether.prevPos
-    if prev then
+    if prev and deltaSeconds and deltaSeconds > 0 then
         local moved = self.position - prev
         local tangent = right * math.cos(sw.theta)
                       + util.vector3(0, 0, math.sin(sw.theta))
-        sw.omega = moved:dot(tangent) / radius
+        sw.omega = moved:dot(tangent) / (radius * deltaSeconds)
     end
 
     applySwingLevitation()
@@ -1319,11 +1374,19 @@ local function updateTetherState(deltaSeconds)
         return
     end
 
+    local grounded = types.Actor.isOnGround(self)
+    if grounded then
+        state.tether.groundZ = self.position.z
+    end
+
+    -- Airborne AND fallen below the last ground: off a ledge, not a jump.
+    local groundZ = state.tether.groundZ or self.position.z
     if settings.swingEnabled()
         and state.tether.rappelAnchor
-        and not types.Actor.isOnGround(self)
+        and not grounded
+        and self.position.z < groundZ - SWING_START_DROP
     then
-        beginSwing()
+        beginSwing(deltaSeconds)
         return
     end
 
@@ -1349,6 +1412,9 @@ local function onUpdate(deltaSeconds)
     updateHangingState(deltaSeconds)
     updateActiveRope(deltaSeconds)
     updateReticleVisibility(deltaSeconds)
+    -- Catches every way out of a hold, including the ones that do not pass
+    -- through setMode (a rope phase ending, an override released).
+    syncFlowYield()
 end
 
 local function onSave()
@@ -1400,6 +1466,7 @@ local function onLoad(savedData)
     -- Deferred: the animation object may not exist while loading.
     pendingAnimReset = pendingAnimReset or resetAnimation
     state.mode = HookshotState.IDLE
+    syncFlowYield()
     state.ownedOverrides.combatControlsSuppressed = false
     state.ownedOverrides.movementControlsOverridden = false
     state.hanging.position = nil
@@ -1529,6 +1596,7 @@ attachTravelingHook = function(anchor)
     end
 
     rope.phase = ROPE_PHASE_SELF_PULL
+    syncFlowYield()
     debugPrint("Hook attached - pulling player to world")
     if not hookToWorldObject(
         attachedPosition,
@@ -1553,6 +1621,7 @@ local function retractTether()
 
     rope.phase = ROPE_PHASE_SELF_PULL
     setMode(HookshotState.FIRING)
+    syncFlowYield()
     ambient.playSoundFile(settings.sounds.fire)
     debugPrint("Tether retracting")
 

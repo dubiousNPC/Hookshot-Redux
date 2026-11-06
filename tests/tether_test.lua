@@ -174,7 +174,11 @@ fireAt()
 check("tethered before the swing", lastMessage(), "Rope attached - fire again to reel in")
 
 S.globalEvents, S.effects = {}, {}
+-- Off the edge: airborne AND below the ground just left. Clearing onGround
+-- alone is also what a jump does, and a swing must not start from a jump
+-- (tether_edge_test, case B).
 S.onGround = false
+S.pos = S.pos + v3(0, 0, -50)
 frames(1)
 check("levitation applied", (S.effects.levitate or 0) > 0, true)
 check("pose switched to the swing", S.pose, "hookhangdwn")
@@ -202,6 +206,7 @@ set(TETHER, "SWING_ENABLED", false)
 fireAt()
 S.effects = {}
 S.onGround = false
+S.pos = S.pos + v3(0, 0, -50)
 frames(10)
 check("no swing when disabled", (S.effects.levitate or 0), 0)
 check("still tethered", S.pose, "hookhang")

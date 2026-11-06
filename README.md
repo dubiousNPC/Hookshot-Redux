@@ -94,6 +94,17 @@ Reasoning that used to live in code comments.
 **Save and load**
 - The hook is not saved. `onSave` stores only the overrides, levitation and crosshair state this mod owns, so `onLoad` can undo them without touching another mod's. The animation reset waits for the first update, since the animation object may not exist during load.
 
+### Parkourwind FLOW
+While the hookshot carries, swings, launches, lands or hangs the player, it
+stands FLOW down through `I.Flow.yield`. `syncFlowYield` in `player.lua` runs
+from `setMode`, from the self-pull phase change and once per frame. Without
+it, FLOW read the hold as a jump: the Jump that drops a hang chained into a
+FLOW ledge grab, and a long pull could play FLOW's Skydive and land as a
+knockdown over the landing pose. The yield is issued *before* the hookshot
+writes the movement override, because the flag is shared and FLOW releases its
+own hold as it stands down. FLOW stays active while merely **tethered**: the
+player walks free there. Without FLOW installed nothing changes.
+
 ### Credits:
 imarchnemesis: Original Hookshot mod.
 S3ctor: Reticle assets and T4rg3t5 logic.
