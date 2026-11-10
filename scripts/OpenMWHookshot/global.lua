@@ -18,20 +18,28 @@ local I = require('openmw.interfaces')
 -- object being saved, so a save taken while tethered stored the dart and the
 -- load left it hanging in the world. Instead the live darts go into this
 -- script's own save data and are removed on load.
+--
+-- KEYED BY THE OWNER'S id, NOT THE OBJECT. Each event hands this script its
+-- own userdata for the player, so a table keyed by the object missed on the
+-- end event: the dart was never removed (measured in OpenMW 0.52: found=false
+-- with one dart tracked, after every hang). It stayed in the world as a
+-- pickup, and the aim cone preferred it as an item target over the surface
+-- being aimed at, so the next shot pulled the old dart instead of hooking.
 local DART_RECORD = "dbs_hookshot_dart"
-local darts = setmetatable({}, { __mode = "k" })
+local darts = {}   -- owner.id -> dart
 
 local function dartFor(owner, cell, pos, rotation)
-    local dart = darts[owner]
+    local key = owner.id
+    local dart = darts[key]
     if dart and not dart:isValid() then
-        darts[owner] = nil
+        darts[key] = nil
         dart = nil
     end
 
     if not dart then
         dart = world.createObject(DART_RECORD)
         if not dart then return nil end
-        darts[owner] = dart
+        darts[key] = dart
     end
 
     if rotation then
@@ -54,8 +62,8 @@ end
 
 local function dartEndHandler(data)
     if not data or not data.owner then return end
-    local dart = darts[data.owner]
-    darts[data.owner] = nil
+    local dart = darts[data.owner.id]
+    darts[data.owner.id] = nil
     if dart and dart:isValid() then
         dart:remove()
     end

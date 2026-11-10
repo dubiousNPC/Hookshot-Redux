@@ -30,7 +30,7 @@ local SPEED = {
     hookshoot   = 1.0,  -- 0.500s
     hookitem    = 1.0,  -- 0.667s
     hookgo      = 1.0,  -- 0.667s
-    hookoff     = 1.5,  -- 1.000s clip over a ~0.32s handoff window
+    hookoff     = 1.5,  -- 1.000s clip over the <=0.8s handoff window
     hookhang    = 0.4,  -- 0.167s loop, 6Hz at speed 1
     hookhangup  = 0.5,  -- 0.333s loop
     hookhangdwn = 0.5,  -- 0.333s loop
@@ -101,7 +101,11 @@ local function playPose(group, priority, blendMask)
     -- Lua nothing, so currentGroup can name a pose that is no longer playing.
     -- animation.isPlaying reads mStates directly (animation.cpp:1209-1215), which
     -- is what makes a pose re-asserted per frame -- the hang pose -- self-healing.
-    if currentGroup == group and anim.isPlaying(self, group) then return end
+    --
+    -- The mask is part of the identity: the same clip moves from upper body to
+    -- full body when a shot turns into a pull, and that has to replay it.
+    if currentGroup == group and currentBlendMask == blendMask
+        and anim.isPlaying(self, group) then return end
 
     local outgoing = currentGroup
     currentGroup = group
@@ -210,21 +214,54 @@ function Anim.updateHanging(hangingData)
     end
 end
 
+-- FULL BODY ONLY WHILE THE HOOKSHOT MOVES THE PLAYER.
+--
+-- The engine takes walking speed from the leg animation: with a full-body pose
+-- on LowerBody the player walks at 0 (measured in OpenMW 0.52: 0 units in
+-- 1.5 s against 189 for a plain walk). So a full-body pose is only for states
+-- where the hookshot, not the legs, moves the player -- the self-pull, the
+-- hand-off, the swing and the hang. Anywhere the player still walks -- aiming,
+-- the shot on its way out, pulling an item or an actor in, the planted dart --
+-- the pose is upper body and the legs stay under locomotion.
+
+-- The firing pose: full body only once the rope is pulling the player in.
+local function playFiring(hookshotState)
+    local targeting = hookshotState and hookshotState.targeting
+    local targetType = targeting and targeting.lastTargetType
+    local group = FIRING_GROUPS[targetType] or FIRING_GROUPS.default
+    local rope = hookshotState and hookshotState.rope
+    if rope and rope.phase == "SELF_PULL" then
+        playLoop(group)
+    else
+        playLoopAlt(group)
+    end
+end
+
+-- player.lua calls this when an outbound shot lands and starts a self-pull.
+function Anim.onPullStarted(hookshotState)
+    playFiring(hookshotState)
+end
+
 function Anim.onStateChange(newState, oldState, hookshotState)
     if newState == "DRAWN" then
         playLoopAlt(GROUPS.DRAWN)
 
     elseif newState == "FIRING" then
-        local targeting = hookshotState and hookshotState.targeting
-        local targetType = targeting and targeting.lastTargetType
-        playLoop(FIRING_GROUPS[targetType] or FIRING_GROUPS.default)
+        playFiring(hookshotState)
 
-    elseif newState == "HANDOFF" or newState == "LAUNCH" then
-        -- Upper body: the player is really moving during both.
+    elseif newState == "HANDOFF" then
+        -- Full body: hookoff is authored for the whole body (pelvis 43 deg,
+        -- thighs 34 deg). Played upper body only, the legs showed the jump
+        -- pose and the hand-off read as no animation at all.
+        playLoop(GROUPS.HANDOFF)
+
+    elseif newState == "LAUNCH" then
+        -- Upper body: thrown clear of the rope, the player is no longer pulled.
         playLoopAlt(GROUPS.HANDOFF)
 
     elseif newState == "TETHERED" then
-        playLoop(GROUPS.HANG_IDLE)
+        -- Upper body: the dart is planted and the player walks freely.
+        playLoopAlt(GROUPS.HANG_IDLE)
 
     elseif newState == "SWINGING" then
         playLoop(GROUPS.HANG_DOWN)

@@ -258,6 +258,7 @@ package.loaded['openmw.interfaces'] = {
     AnimationController = {
         playBlendedAnimation = function(g, o)
             S.pose = g
+            S.poseMask = o and o.blendMask
             S.poseLog[#S.poseLog + 1] = "play " .. tostring(g)
         end,
     },

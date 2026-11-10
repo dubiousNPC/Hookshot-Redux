@@ -124,22 +124,41 @@ function Targeting.checkRappelClearance(hitPos, hitNormal)
         })
 
         if result.hit then
-            local belowFloorStart = result.hitPos - util.vector3(0, 0, 20)
-            local belowFloorEnd = belowFloorStart - util.vector3(0, 0, settings.minRappelClearance() + 50)
-
-            local belowResult = nearby.castRay(belowFloorStart, belowFloorEnd, {
-                collisionType = HOOKSHOT_PHY,
-                ignore = self
-            })
-
-            if belowResult.hit then
-                local clearance = (belowFloorStart - belowResult.hitPos):length()
-                debugPrint("Floor rappel check: clearance below platform =", clearance, "required =", settings.minRappelClearance())
-                return clearance >= settings.minRappelClearance()
-            else
-                debugPrint("Floor rappel check: no ground below platform, clearance OK")
-                return true
+            -- Measure the drop PAST THE EDGE, where the player will hang:
+            -- step from the hit toward the player (the open side, as
+            -- checkLedgeEdge establishes) until a downward ray no longer meets
+            -- the platform top.
+            --
+            -- Not straight down from 20 below the top: that start is inside
+            -- the platform, so the ray met the platform's own underside and
+            -- every platform thicker than 20 units read as no clearance
+            -- (measured in game: 22 for a 54-unit slab, 100 for a 155-unit one).
+            local top = result.hitPos.z
+            local minClear = settings.minRappelClearance()
+            local toward = util.vector3(self.position.x - hitPos.x, self.position.y - hitPos.y, 0)
+            if toward:length() < 1 then
+                debugPrint("Floor rappel check: player directly above, denying")
+                return false
             end
+            toward = toward:normalize()
+            for d = 0, 160, 8 do
+                local p = hitPos + toward * d
+                local drop = nearby.castRay(
+                    util.vector3(p.x, p.y, top + 30),
+                    util.vector3(p.x, p.y, top - minClear - 50),
+                    { collisionType = HOOKSHOT_PHY, ignore = self })
+                if not drop.hit then
+                    debugPrint("Floor rappel check:", d, "past the hit, no ground below, clearance OK")
+                    return true
+                end
+                if drop.hitPos.z < top - 40 then
+                    local clearance = top - drop.hitPos.z
+                    debugPrint("Floor rappel check:", d, "past the hit, clearance =", clearance, "required =", minClear)
+                    return clearance >= minClear
+                end
+            end
+            debugPrint("Floor rappel check: no edge within 160 toward the player, denying")
+            return false
         else
             debugPrint("Floor rappel check: probe missed, denying")
             return false
@@ -249,6 +268,121 @@ function Targeting.checkLedgeEdge(hitPos, hitNormal, cameraPos, cameraPitch, sur
         debugPrint("Ledge edge check: no ground in approach path - LEDGE EDGE confirmed")
         return true
     end
+end
+
+-- ==============================================
+-- HANG POSITION
+-- ==============================================
+-- Where a hang puts the player: feet HANG_DROP below the anchor, in the
+-- clear column closest to straight under it.
+--
+-- The landing offset used to follow the surface normal, so the hang sat out
+-- along the normal rather than under the rope: 30 out and only 20 below a wall
+-- anchor (the head above the hook, the rope sticking sideways), and diagonally
+-- off a sloped ceiling. A ledge (a floor hit) put the feet straight below a
+-- point on top of the platform, inside it.
+local HANG_RADIUS = 32        -- player half-width (30) plus a margin
+local HANG_STEP = 8
+local HANG_MAX_OFFSET = 160   -- beyond this, keep the legacy offset
+-- The anchor comes from a rendering ray and can sit 10-12 units inside the
+-- collision surface (measured in game). A rope-ray hit this close to the
+-- anchor is the anchor's own surface, not an obstruction.
+local HANG_ANCHOR_SLOP = 32
+
+-- Horizontal unit vector or nil.
+local function flat(v)
+    if not v then return nil end
+    local h = util.vector3(v.x, v.y, 0)
+    if h:length() < 0.15 then return nil end
+    return h:normalize()
+end
+
+-- Is the player-sized column at (x, y), from topZ down to feetZ, free?
+-- Vertical rays at the centre and at four points HANG_RADIUS out.
+local function columnClear(centre, topZ, feetZ, side)
+    local offsets = {
+        util.vector3(0, 0, 0),
+        side * HANG_RADIUS, side * -HANG_RADIUS,
+        util.vector3(-side.y, side.x, 0) * HANG_RADIUS,
+        util.vector3(side.y, -side.x, 0) * HANG_RADIUS,
+    }
+    for _, o in ipairs(offsets) do
+        local x, y = centre.x + o.x, centre.y + o.y
+        local r = nearby.castRay(util.vector3(x, y, topZ), util.vector3(x, y, feetZ),
+            { collisionType = HOOKSHOT_PHY, ignore = self })
+        if r.hit then return false, r end
+    end
+    return true
+end
+
+---@param anchor any vector3, where the hook holds
+---@param hitNormal any vector3
+---@param surfaceType string "floor" | "wall" | "ceiling"
+---@param towardPlayer any vector3 or nil, anchor-to-player direction
+---@return any|nil feet position, or nil to keep the legacy landing offset
+function Targeting.resolveHangPosition(anchor, hitNormal, surfaceType, towardPlayer)
+    local feetZ = anchor.z - orient.CEILING_OFFSET
+    -- Which way is open. A ceiling is open straight down; a sloped one also
+    -- away from its slope. A wall is open along its normal. A ledge is a floor
+    -- hit whose open side is the player's (checkLedgeEdge found no ground there).
+    local out
+    if surfaceType == "wall" then
+        out = flat(hitNormal)
+    elseif surfaceType == "ceiling" then
+        out = flat(hitNormal) or flat(towardPlayer)
+    else
+        out = flat(towardPlayer)
+    end
+    if not out then return nil end
+
+    -- Over a ledge the rays start ABOVE the top surface, so a column still
+    -- over the platform is blocked by it, and the rope is allowed to bend over
+    -- the edge. Elsewhere the column is the player's own height (head plus a
+    -- margin), which never starts a ray inside a sloped ceiling, and the rope
+    -- from there to the hook must be clear.
+    local ledge = surfaceType == "floor"
+    local headZ = feetZ + PLAYER_HEIGHT + 20
+    local topZ = ledge and (anchor.z + 30) or headZ
+    local hook = anchor + (hitNormal and hitNormal:normalize() * 4 or util.vector3(0, 0, -4))
+    local function ropeBlocked(r)
+        return r.hit and r.hitPos and (r.hitPos - anchor):length() > HANG_ANCHOR_SLOP
+    end
+    -- A ceiling may be clear straight under the hook; a wall's face is never.
+    local first = (surfaceType == "ceiling") and 0 or (HANG_RADIUS + 2)
+    -- Where the wall's collision face really is, at the body's heights: the
+    -- anchor can sit inside it (HANG_ANCHOR_SLOP), and a leaning wall is
+    -- nearer at one height than another. Without this the hang point was ~10
+    -- units into the face and the physics push-out varied from 48 to 73.
+    if surfaceType == "wall" then
+        for _, z in ipairs({ feetZ + PLAYER_HEIGHT * 0.5, headZ }) do
+            local from = util.vector3(anchor.x, anchor.y, z) + out * 200
+            local face = nearby.castRay(from, util.vector3(anchor.x, anchor.y, z) - out * 50,
+                { collisionType = HOOKSHOT_PHY, ignore = self })
+            if face.hit and face.hitPos then
+                local faceOut = (face.hitPos - anchor):dot(out)
+                first = math.max(first, math.ceil(faceOut + HANG_RADIUS + 2))
+            end
+        end
+    end
+
+    for d = first, HANG_MAX_OFFSET, HANG_STEP do
+        local centre = anchor + out * d
+        local rope = (not ledge) and nearby.castRay(util.vector3(centre.x, centre.y, headZ), hook,
+            { collisionType = HOOKSHOT_PHY, ignore = self })
+        local clear, blocker = false, rope
+        if not (rope and ropeBlocked(rope)) then clear, blocker = columnClear(centre, topZ, feetZ, out) end
+        if not clear and (d == first or d + HANG_STEP > HANG_MAX_OFFSET) then
+            debugPrint("Hang column", d, "out blocked by", (rope and ropeBlocked(rope)) and "rope ray" or "column ray",
+                blocker and blocker.hitObject and blocker.hitObject.recordId or "-",
+                blocker and blocker.hitPos and orient.normalToString(blocker.hitPos) or "-")
+        end
+        if clear then
+            debugPrint("Hang column found", d, "out from the anchor")
+            return util.vector3(centre.x, centre.y, feetZ)
+        end
+    end
+    debugPrint("No clear hang column within", HANG_MAX_OFFSET, "- keeping the surface offset")
+    return nil
 end
 
 -- ==============================================

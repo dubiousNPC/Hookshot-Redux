@@ -94,6 +94,11 @@ local HANDOFF_GROUND_PROBE = 24     -- Downward probe length used to decide whet
 
 -- Rappel climb stops with the head this far below the anchor.
 local RAPPEL_HEAD_CLEARANCE = 24
+-- A pull that stops short of the hang point (it may arrive up to 100 off,
+-- along its diagonal approach) settles the rest of the way, horizontally,
+-- like a rope swinging to rest under its anchor.
+local HANG_SETTLE_SPEED = 400       -- units/s
+local HANG_SETTLE_DONE = 2          -- horizontal distance that ends the settle
 local PLAYER_HEIGHT = U.PLAYER_HEIGHT
 
 local ROPE_PHASE_OUTBOUND = "OUTBOUND"
@@ -163,6 +168,7 @@ local state = {
         levitationApplied = false,
         pitchOverride = 0,
         isMoving = false,
+        settling = false,   -- moving under the anchor after a short-stopped pull
     },
 
     itemMenu = {
@@ -782,6 +788,12 @@ local function handleSequenceCompletion(event)
                 state.hanging.levitationApplied = false
                 state.hanging.pitchOverride = 0
                 state.hanging.isMoving = false
+                state.hanging.settling = true
+                debugPrint(string.format("Hang: anchor (%.0f, %.0f, %.0f), hang point %.0f out and %.0f below it, player %.0f from it",
+                    state.hanging.anchorPosition.x, state.hanging.anchorPosition.y, state.hanging.anchorPosition.z,
+                    util.vector3(landingData.position.x - state.hanging.anchorPosition.x,
+                                 landingData.position.y - state.hanging.anchorPosition.y, 0):length(),
+                    state.hanging.anchorPosition.z - landingData.position.z, distanceToTarget))
                 if state.rope.active then
                     state.rope.phase = ROPE_PHASE_HANGING
                     state.rope.anchorPosition = state.hanging.anchorPosition
@@ -1020,6 +1032,31 @@ local function updateHangingState(deltaSeconds)
         return
     end
 
+    -- Settle under the anchor first; climbing follows from wherever it stops.
+    if state.hanging.settling then
+        local target = state.hanging.position
+        local toTarget = target and util.vector3(target.x - currentPos.x, target.y - currentPos.y, 0)
+        local dist = toTarget and toTarget:length() or 0
+        if dist <= HANG_SETTLE_DONE then
+            state.hanging.settling = false
+        else
+            local step = math.min(HANG_SETTLE_SPEED * deltaSeconds, dist)
+            local dir = toTarget * (1 / dist)
+            -- Body-high probe along the move: never settle into a wall.
+            local mid = currentPos + util.vector3(0, 0, PLAYER_HEIGHT * 0.5)
+            local probe = nearby.castRay(mid, mid + dir * (step + 32),
+                { collisionType = HOOKSHOT_PHY, ignore = self })
+            if probe.hit then
+                debugPrint("Hang settle blocked,", dist, "short of the hang point")
+                state.hanging.settling = false
+            else
+                core.sendGlobalEvent('ragdollTeleport', { object = self.object, newPos = currentPos + dir * step })
+                Anim.updateHanging(state.hanging)
+                return
+            end
+        end
+    end
+
     local currentRopeLength = (anchorPos - currentPos):length()
     state.hanging.currentRopeLength = currentRopeLength
 
@@ -1136,6 +1173,7 @@ releaseFromHang = function()
     state.hanging.currentRopeLength = 0
     state.hanging.pitchOverride = 0
     state.hanging.isMoving = false
+    state.hanging.settling = false
 
     ambient.playSoundFile(settings.sounds.toggle)
 end
@@ -1475,6 +1513,7 @@ local function onLoad(savedData)
     state.hanging.currentRopeLength = 0
     state.hanging.pitchOverride = 0
     state.hanging.isMoving = false
+    state.hanging.settling = false
     Reticle:hide()
     if restoreCrosshair then
         -- A recreated Reticle cannot unhide the old crosshair itself.
@@ -1524,6 +1563,13 @@ local function hookToWorldObject(hitPos, hitNormal, approachDir, playerYaw, came
 
     local landingData = orient.calculateLanding(hitPos, hitNormal, approachDir, playerYaw, rappelEligible)
     landingData.anchorPosition = hitPos
+
+    -- A hang goes under the rope, not out along the surface normal.
+    if landingData.isHang then
+        local hangPos = Targeting.resolveHangPosition(hitPos, hitNormal, landingData.surfaceType,
+                                                       self.position - hitPos)
+        if hangPos then landingData.position = hangPos end
+    end
 
     -- Non-rappel grapples aim above the landing and release short; a hang must arrive.
     local handoffDistance = 0
@@ -1597,6 +1643,8 @@ attachTravelingHook = function(anchor)
 
     rope.phase = ROPE_PHASE_SELF_PULL
     syncFlowYield()
+    -- The shot's upper-body pose becomes full body as the pull starts.
+    Anim.onPullStarted(state)
     debugPrint("Hook attached - pulling player to world")
     if not hookToWorldObject(
         attachedPosition,

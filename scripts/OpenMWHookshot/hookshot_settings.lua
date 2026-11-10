@@ -307,7 +307,7 @@ interfaces.Settings.registerGroup {
     permanentStorage = true,
     order = 2,
     settings = {
-        { key = "RETICLE_ICON", renderer = "select", name = "Reticle Icon", default = 'starburst',
+        { key = "RETICLE_ICON", renderer = "select", name = "Reticle Icon", default = 'classic',
           argument = { l10n = 'OpenMWHookshot', items = settings.iconNames },
           description = 'Icon style for the targeting reticle' },
         { key = "RETICLE_IDLE_SIZE", renderer = "number", name = "Idle Size", default = 24,
