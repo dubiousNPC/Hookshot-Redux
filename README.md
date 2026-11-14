@@ -111,6 +111,12 @@ writes the movement override, because the flag is shared and FLOW releases its
 own hold as it stands down. FLOW stays active while merely **tethered**: the
 player walks free there. Without FLOW installed nothing changes.
 
+### Take a Seat
+While Take a Seat (v0.44+) holds the player, meaning seated, lying, or still
+getting up (`I.TakeASeat.isBusy()`), the hookshot is neither drawn nor fired:
+"Get up first". Otherwise it would pull or launch a seated body out of its
+pose with collision off. Without Take a Seat installed nothing changes.
+
 ### Credits:
 imarchnemesis: Original Hookshot mod.
 S3ctor: Reticle assets and T4rg3t5 logic.

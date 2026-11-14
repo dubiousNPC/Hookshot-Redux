@@ -1705,8 +1705,23 @@ local function deactivateHookshotDrawnState()
     debugPrint("State changed to IDLE")
 end
 
+-- Take a Seat (v0.44+) holds the player: seated, lying, or still getting up.
+-- Drawing or firing then would pull or launch a seated body out of its pose
+-- with collision off (Take a Seat docs/tickets/0010).
+local function seatedByTakeASeat()
+    local T = I.TakeASeat
+    if not (T and T.isBusy) then return false end
+    local ok, busy = pcall(T.isBusy)
+    return ok and busy == true
+end
+
 local function fireHookshot()
     debugPrint("=== fireHookshot called ===")
+
+    if seatedByTakeASeat() then
+        ui.showMessage("Get up first")
+        return
+    end
 
     -- Every refusal returns before any sound.
     if not state.targeting.impact then
@@ -1799,6 +1814,11 @@ end
 
 local function tryActivateHookshot()
     debugPrint("=== tryActivateHookshot called, current mode =", state.mode)
+
+    if state.mode == HookshotState.IDLE and seatedByTakeASeat() then
+        ui.showMessage("Get up first")
+        return
+    end
 
     if state.mode == HookshotState.DRAWN then
         debugPrint("Mode is DRAWN - sheathing hookshot")

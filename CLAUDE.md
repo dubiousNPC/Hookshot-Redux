@@ -19,6 +19,7 @@ There is no build system. This is a pure Lua mod loaded by OpenMW at runtime.
   - `tests/flow_yield_test.lua <omwstub.lua> <player.lua>` — Parkourwind FLOW stood down for pull/swing/hang, yield before the override write
   - `tests/pose_mask_test.lua <omwstub.lua> <player.lua>` — which poses are full body (only while the hookshot moves the player)
   - `tests/hang_test.lua <omwstub.lua>` — hang position under the anchor, ledge clearance past the edge
+  - `tests/seat_gate_test.lua <omwstub.lua> <player.lua>` — no draw or fire while Take a Seat (`I.TakeASeat.isBusy()`) holds the player
   - Run them under **LuaJIT**, which is what OpenMW runs (Lua 5.1 semantics), not only under
     `tests/runlua.py` (Lua 5.4): e.g. `math.atan(y, x)` ignores its second argument in LuaJIT.
     OpenMW's LuaJIT has Lua 5.2 compat (`table.move`, `table.unpack` exist; `math.type`, `bit`, `load` do not).
