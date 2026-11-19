@@ -1,0 +1,11 @@
+# Text is stored and checked out with LF; assets are never touched.
+* text=auto eol=lf
+*.dds binary
+*.tga binary
+*.nif binary
+*.NIF binary
+*.kf binary
+*.mp3 binary
+*.omwaddon binary
+*.esp binary
+*.png binary
