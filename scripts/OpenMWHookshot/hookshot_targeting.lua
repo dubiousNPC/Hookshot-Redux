@@ -42,6 +42,11 @@ local PLAYER_HEIGHT = U.PLAYER_HEIGHT
 local DOWNWARD_LOOK_THRESHOLD = -0.05    -- camera pitch, radians (~3 degrees down)
 local LEDGE_EDGE_TOLERANCE = 64          -- max Z difference for "same surface"
 local LEDGE_PROBE_CLEARANCE = 40
+local LEDGE_STEP = 8
+-- How far past the hit an edge may be and still offer a rappel: the hang needs a
+-- column HANG_RADIUS (32) clear of the edge within HANG_MAX_OFFSET (160) of the
+-- hook, so an edge further than 128 offers a rappel that cannot hang.
+local LEDGE_SCAN = 128
 
 -- Item cone half-angle, radians (~8.6 degrees)
 local ITEM_DETECTION_ANGLE_THRESHOLD = 0.15
@@ -141,7 +146,7 @@ function Targeting.checkRappelClearance(hitPos, hitNormal)
                 return false
             end
             toward = toward:normalize()
-            for d = 0, 160, 8 do
+            for d = 0, LEDGE_SCAN, LEDGE_STEP do
                 local p = hitPos + toward * d
                 local drop = nearby.castRay(
                     util.vector3(p.x, p.y, top + 30),
@@ -157,7 +162,7 @@ function Targeting.checkRappelClearance(hitPos, hitNormal)
                     return clearance >= minClear
                 end
             end
-            debugPrint("Floor rappel check: no edge within 160 toward the player, denying")
+            debugPrint("Floor rappel check: no edge within", LEDGE_SCAN, "toward the player, denying")
             return false
         else
             debugPrint("Floor rappel check: probe missed, denying")
@@ -227,47 +232,35 @@ function Targeting.checkLedgeEdge(hitPos, hitNormal, cameraPos, cameraPitch, sur
 
     towardPlayer = towardPlayer:normalize()
 
-    -- Probe point WALL_OFFSET toward the player.
-    local probePoint = hitPos + towardPlayer * orient.WALL_OFFSET
+    -- A floor hit is scanned over the reach checkRappelClearance uses to find
+    -- the drop (LEDGE_SCAN). A single probe at WALL_OFFSET (60) refused lip hits
+    -- 60-128 from the edge that the clearance check had accepted. Other surfaces
+    -- keep the single probe. Only reached after checkRappelClearance passed.
+    local first, last = orient.WALL_OFFSET, orient.WALL_OFFSET
+    if isFloorSurface then first, last = LEDGE_STEP, LEDGE_SCAN end
 
-    local probeStart = probePoint + util.vector3(0, 0, PLAYER_HEIGHT * 0.5 + LEDGE_PROBE_CLEARANCE)
-    local probeEnd = probePoint - util.vector3(0, 0, PLAYER_HEIGHT * 2)
+    for d = first, last, LEDGE_STEP do
+        local probePoint = hitPos + towardPlayer * d
+        local result = nearby.castRay(
+            probePoint + util.vector3(0, 0, PLAYER_HEIGHT * 0.5 + LEDGE_PROBE_CLEARANCE),
+            probePoint - util.vector3(0, 0, PLAYER_HEIGHT * 2),
+            { collisionType = HOOKSHOT_PHY, ignore = self })
 
-    debugPrint("Ledge edge check: probing from",
-        string.format("(%.1f, %.1f, %.1f)", probeStart.x, probeStart.y, probeStart.z),
-        "to",
-        string.format("(%.1f, %.1f, %.1f)", probeEnd.x, probeEnd.y, probeEnd.z))
-
-    local result = nearby.castRay(probeStart, probeEnd, {
-        collisionType = HOOKSHOT_PHY,
-        ignore = self
-    })
-
-    if result.hit then
-        local groundZ = result.hitPos.z
-        local hitZ = hitPos.z
-        local heightDiff = math.abs(groundZ - hitZ)
-
-        local isFlat = result.hitNormal and result.hitNormal.z > 0.7
-
-        debugPrint("Ledge edge check: ground found at Z =", groundZ,
-                   "hit Z =", hitZ,
-                   "diff =", heightDiff,
-                   "tolerance =", LEDGE_EDGE_TOLERANCE,
-                   "isFlat =", tostring(isFlat))
-
-        -- Continuous surface, not a ledge.
-        if heightDiff < LEDGE_EDGE_TOLERANCE and isFlat then
-            debugPrint("Ledge edge check: CONTINUOUS SURFACE detected - denying rappel")
-            return false
-        else
-            debugPrint("Ledge edge check: surface height differs or not flat - this is a ledge edge")
+        if not result.hit then
+            debugPrint("Ledge edge check:", d, "toward the player, no ground - LEDGE EDGE confirmed")
             return true
         end
-    else
-        debugPrint("Ledge edge check: no ground in approach path - LEDGE EDGE confirmed")
-        return true
+        local heightDiff = math.abs(result.hitPos.z - hitPos.z)
+        local isFlat = result.hitNormal and result.hitNormal.z > 0.7
+        if heightDiff >= LEDGE_EDGE_TOLERANCE or not isFlat then
+            debugPrint("Ledge edge check:", d, "toward the player, ground differs by", heightDiff,
+                       "flat =", tostring(isFlat), "- this is a ledge edge")
+            return true
+        end
     end
+
+    debugPrint("Ledge edge check: CONTINUOUS SURFACE to", last, "toward the player - denying rappel")
+    return false
 end
 
 -- ==============================================

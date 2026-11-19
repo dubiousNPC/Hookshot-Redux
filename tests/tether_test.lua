@@ -124,7 +124,8 @@ realPrint("\ndelayed firing on: dart planted, rope held")
 set(TETHER, "DELAYED_FIRING", true)
 fireAt()
 check("tethered", lastMessage(), "Rope attached - fire again to reel in")
-check("pose is the rope hold", S.pose, "hookhang")
+check("pose is the aim, upper body", S.pose, "hookaim")
+check("the rope hangs slack", S.ropeSlack, true)
 check("dart published", countGlobal('HookshotDartUpdate') > 0, true)
 
 -- ---------------------------------------------------------------------------
@@ -209,7 +210,7 @@ S.onGround = false
 S.pos = S.pos + v3(0, 0, -50)
 frames(10)
 check("no swing when disabled", (S.effects.levitate or 0), 0)
-check("still tethered", S.pose, "hookhang")
+check("still tethered (aim pose, slack rope)", S.pose == "hookaim" and S.ropeSlack == true, true)
 set(TETHER, "SWING_ENABLED", true)
 
 -- ---------------------------------------------------------------------------
@@ -225,7 +226,7 @@ for _, l in ipairs(logs) do
 end
 set(BASIC, "DEBUG_MODE", false)
 check("retract ran", reeled, true)
-check("pose left the rope hold", S.pose ~= "hookhang", true)
+check("the rope is no longer slack", S.ropeSlack ~= true, true)
 
 -- ---------------------------------------------------------------------------
 realPrint("\nsheath cuts the tether")

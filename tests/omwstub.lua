@@ -247,6 +247,15 @@ S.section = section
 package.loaded['openmw.storage'] = { playerSection = section, globalSection = section }
 
 package.loaded['openmw.interfaces'] = {
+    -- The rope visual (example_beam_consumer/player.lua's interface): records
+    -- whether the rope is drawn slack, which only a planted dart is.
+    DubiousHookshotVisuals = {
+        updateRope = function(_, _, opts)
+            S.ropeSlack = type(opts) == "table" and opts.slack == true
+            return true
+        end,
+        endRope = function() S.ropeSlack = nil end,
+    },
     Settings = {
         registerPage = function() end,
         registerGroup = function(g)

@@ -21,6 +21,7 @@ local rope = {
     lastSentAt = 0,
     lastFrom = nil,
     lastTo = nil,
+    lastSlack = nil,
 }
 
 local function resetRopeState()
@@ -28,6 +29,7 @@ local function resetRopeState()
     rope.lastSentAt = 0
     rope.lastFrom = nil
     rope.lastTo = nil
+    rope.lastSlack = nil
 end
 
 -- ==============================================
@@ -73,18 +75,26 @@ local function handOrigin()
 end
 
 -- Safe every frame. False only for unusable positions.
-local function updateRope(from, to)
+-- `opts.slack` asks the renderer to hang the rope instead of drawing it taut.
+-- Only the delayed-firing tether sets it; it is optional, so a caller built
+-- against the old two-argument form still works.
+local function updateRope(from, to, opts)
     local safeFrom = copyPosition(from)
     local safeTo = copyPosition(to)
     if safeFrom == nil or safeTo == nil then
         return false
     end
 
+    local slack = (type(opts) == "table" and opts.slack == true) or false
+
     local currentTime = core.getSimulationTime()
     local due = (currentTime - rope.lastSentAt) >= KEEPALIVE_INTERVAL
     local moved = movedEnough(rope.lastFrom, safeFrom) or movedEnough(rope.lastTo, safeTo)
+    -- A flag flip has to go out even on a still frame, or the rope keeps the
+    -- shape it had when the tether started.
+    local flipped = rope.lastSlack ~= slack
 
-    if rope.active and not due and not moved then
+    if rope.active and not due and not moved and not flipped then
         return true
     end
 
@@ -92,12 +102,14 @@ local function updateRope(from, to)
         sender = self.object,
         from = safeFrom,
         to = safeTo,
+        slack = slack,
     })
 
     rope.active = true
     rope.lastSentAt = currentTime
     rope.lastFrom = safeFrom
     rope.lastTo = safeTo
+    rope.lastSlack = slack
     return true
 end
 

@@ -78,8 +78,9 @@ check("full body (the clip moves pelvis and legs)", handed and full(), desc())
 realPrint("B. the planted dart")
 set(TETHER, "DELAYED_FIRING", true)
 fire(v3(300, 0, 800))
-local teth = until_(120, function() return S.pose == "hookhang" end)
-check("tethered plays hookhang", teth ~= nil, desc())
+-- hookaim is also the drawn pose: the slack rope is what marks the planted dart.
+local teth = until_(120, function() return S.pose == "hookaim" and S.ropeSlack == true end)
+check("tethered plays hookaim", teth ~= nil, desc())
 check("upper body: the player walks", teth and not full(), desc())
 S.actions['Use'](true)        -- reel in
 frames(1)

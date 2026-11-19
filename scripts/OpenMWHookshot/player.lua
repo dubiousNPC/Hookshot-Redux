@@ -34,7 +34,7 @@ local isGrabbable = U.isGrabbable
 local debugPrint = settings.debugPrint
 
 ---@class DubiousHookshotVisualsInterface
----@field updateRope fun(from: any, to: any): boolean
+---@field updateRope fun(from: any, to: any, opts: table|nil): boolean
 ---@field endRope fun()
 ---@field handOrigin fun(): any
 
@@ -84,7 +84,7 @@ local HOOKED_ACTOR_EVENT = "Dubious_HookShot_ActorHooked"
 local ACTOR_FALL_DURATION = 1.5
 
 local LANDING_DURATION = 0.4        -- How long the landing state lasts (physics settle time)
-local RAPPEL_LEVITATION_MAGNITUDE = 10   -- Levitation effect magnitude (same as ladder mod)
+local RAPPEL_LEVITATION_MAGNITUDE = 1    -- any Levitate stops gravity; the suite keeps it at 1 for mods that read it
 local PULL_OFFSET = 50              -- Hardcoded offset for pull target position
 
 -- Handoff: engine movement covers the last stretch after the drag releases.
@@ -355,7 +355,12 @@ local function publishRope(endPosition)
 
     local updateRope = ropeInterfaceMethod("updateRope")
     if not updateRope then return end
-    updateRope(from, to)
+    -- The rope only hangs where it is genuinely slack: delayed firing with the
+    -- dart planted and the player walking around. FIRING, the self-pull, the
+    -- swing and the hang are all under tension and stay straight.
+    local slack = state.rope.delayed == true
+        and state.mode == HookshotState.TETHERED
+    updateRope(from, to, { slack = slack })
 end
 
 local function validObjectPosition(object)

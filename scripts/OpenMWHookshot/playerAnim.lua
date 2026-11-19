@@ -23,8 +23,6 @@ local FIRING_GROUPS = {
     default = "hookgo", -- wall, floor, ceiling, rappel, none
 }
 
--- Playback speed per group. Clip lengths are fixed in the .kf; these fit them
--- to how long each state actually lasts. Under 1 stretches, over 1 compresses.
 local SPEED = {
     hookaim     = 0.8,  -- 0.833s held aim loop
     hookshoot   = 1.0,  -- 0.500s
@@ -134,11 +132,11 @@ end
 -- MODEL REBUILDS
 -- ---------------------------------------------------------------------------
 --
--- Two of the five states hold a pose for as long as the player likes: DRAWN while
--- aiming, and HANGING while suspended. A rebuild drops both, and the guard above
--- only heals the ones something re-asserts -- HANGING, via player.lua's per-frame
--- updateHanging. DRAWN is set once from setMode, so nothing comes back for it
--- unless it is told, which is what AnimRefresh is for.
+-- DRAWN, TETHERED, SWINGING and HANGING hold a pose for as long as the player
+-- likes. A rebuild drops it, and the guard above only heals what something
+-- re-asserts -- HANGING, via player.lua's per-frame updateHanging. The others are
+-- set once from setMode, so nothing comes back for them unless told, which is
+-- what AnimRefresh is for.
 --
 -- Read at call time, never cached at load: interface publication is decided by
 -- load order (scriptscontainer.cpp:283), so AnimRefresh may publish after this
@@ -261,7 +259,7 @@ function Anim.onStateChange(newState, oldState, hookshotState)
 
     elseif newState == "TETHERED" then
         -- Upper body: the dart is planted and the player walks freely.
-        playLoopAlt(GROUPS.HANG_IDLE)
+        playLoopAlt(GROUPS.DRAWN)
 
     elseif newState == "SWINGING" then
         playLoop(GROUPS.HANG_DOWN)
