@@ -20,6 +20,7 @@ There is no build system. This is a pure Lua mod loaded by OpenMW at runtime.
   - `tests/pose_mask_test.lua <omwstub.lua> <player.lua>` — which poses are full body (only while the hookshot moves the player)
   - `tests/hang_test.lua <omwstub.lua>` — hang position under the anchor, ledge clearance past the edge
   - `tests/seat_gate_test.lua <omwstub.lua> <player.lua>` — no draw or fire while Take a Seat (`I.TakeASeat.isBusy()`) holds the player
+  - `tests/rope_consumer_test.lua <mod root> [noverlet | real <BeamFX root>]` — the rope renderer: taut vs slack, point counts, verlet chain, teardown
   - Run them under **LuaJIT**, which is what OpenMW runs (Lua 5.1 semantics), not only under
     `tests/runlua.py` (Lua 5.4): e.g. `math.atan(y, x)` ignores its second argument in LuaJIT.
     OpenMW's LuaJIT has Lua 5.2 compat (`table.move`, `table.unpack` exist; `math.type`, `bit`, `load` do not).
@@ -35,7 +36,8 @@ There is no build system. This is a pure Lua mod loaded by OpenMW at runtime.
 - `PLAYER: scripts/SharedRay/SharedRay_v2.lua` — shared camera ray (vendored)
 - `PLAYER: scripts/AnimRefresh/AnimRefresh_v6.lua` — model-rebuild notices (vendored)
 - `PLAYER: scripts/OpenMWHookshot/example_beam_consumer/player.lua` — rope interface
-- `NPC` / `CREATURE: scripts/OpenMWHookshot/actorAnim.lua` — dragged-in pose on a hooked actor
+- `NPC, CREATURE: scripts/OpenMWHookshot/actorAnim.lua` — dragged-in pose on a hooked actor. One line: a script
+  path listed twice keeps only its last entry's flags, so separate `NPC:` and `CREATURE:` lines attached it to creatures only.
 - `MENU: scripts/OpenMWHookshot/dropin/textSet.lua` — the `textSet_V1` settings renderer (vendored)
 - `GLOBAL: scripts/OpenMWHookshot/global.lua` — teleports and inventory moves
 - `GLOBAL: scripts/OpenMWHookshot/example_beam_consumer/global.lua` — rope renderer

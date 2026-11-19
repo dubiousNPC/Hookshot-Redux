@@ -37,18 +37,16 @@ local SPEED = {
 -- PRIORITIES. The right arm is the firing arm, so it takes the highest value in
 -- both tuples and wins its bone group outright.
 --
--- Both tuples were uniform Weapon, which is the shape to avoid: Animation::play
--- erases every other state whose AnimPriority compares equal on all four bone
--- groups (mwrender/animation.cpp:905-911, operator== in animationpriority.hpp
--- :19-25), so a uniform tuple is DELETED by any animation sharing it rather than
--- merely outranked. Uniform Weapon was also FLOW's tuple until recently, so the
--- two mods deleted each other's poses when installed together.
+-- Never a uniform tuple: Animation::play erases every other state whose
+-- AnimPriority compares equal on all four bone groups (mwrender/animation.cpp
+-- :905-911, operator== in animationpriority.hpp:19-25), so a uniform tuple is
+-- DELETED by any animation sharing it, not merely outranked -- another mod's
+-- uniform Weapon pose and ours would delete each other.
 --
 -- Values are chosen from the per-group gaps the engine leaves. Only states whose
 -- blend mask CONTAINS a group compete for it (animation.cpp:1138), and "shield"
 -- and "torch" are LeftArm-masked, so the uncontested values are LowerBody 7/8/10,
--- Torso 8/10, RightArm 8/10 -- and nothing on LeftArm above Hit. See
--- RESEARCH.md 1.29.
+-- Torso 8/10, RightArm 8/10 -- and nothing on LeftArm above Hit.
 local FULLBODY_PRIORITY = {
     -- Torch(10): the only free value above Knockdown(9), so the firing arm reads
     -- through anything. Nothing competes here -- torch itself is LeftArm-masked.
@@ -56,10 +54,10 @@ local FULLBODY_PRIORITY = {
     -- Left stays at Weapon, below shield(8) and torch(10), so a torch or shield
     -- still wins the off hand.
     [anim.BONE_GROUP.LeftArm] = anim.PRIORITY.Weapon,
-    -- Block(8) instead of Weapon(7): it was tying the drawn-weapon animation,
-    -- which resetActiveGroups breaks with a strict <, i.e. by map order. Free.
+    -- Block(8), not Weapon(7): Weapon ties the drawn-weapon animation, and
+    -- resetActiveGroups breaks a tie with a strict <, i.e. by map order. Free.
     [anim.BONE_GROUP.Torso] = anim.PRIORITY.Block,
-    -- Unchanged. Free, above Movement(5) and Hit(6), below Knockdown(9).
+    -- Free, above Movement(5) and Hit(6), below Knockdown(9).
     [anim.BONE_GROUP.LowerBody] = anim.PRIORITY.Weapon,
 }
 local FULLBODY_BLEND_MASK = anim.BLEND_MASK.LeftArm + anim.BLEND_MASK.Torso
@@ -123,8 +121,7 @@ local function playPose(group, priority, blendMask)
 
     -- Only when it is a DIFFERENT pose. Re-asserting the same group after a
     -- rebuild makes outgoing == group, and releasing it here would cancel the
-    -- state that was just played. The old name-only guard hid this by making a
-    -- same-group call impossible.
+    -- state that was just played.
     if outgoing ~= group then releaseGroup(outgoing) end
 end
 

@@ -63,13 +63,16 @@ S.messages = {}
 aim(); S.actions['Use'](true); frames(30)
 check("after getting up the drawn hookshot fires", last() == "Rope attached - fire again to reel in", last())
 
--- A broken interface does not break the hookshot.
+-- A broken interface is not hidden: the error reaches the log, and the
+-- hookshot neither draws nor fires (no pcall; RESEARCH 2.1, 2.18).
 S.triggers['HookshotSheath'](); frames(60)
 I.TakeASeat = { isBusy = function() error('boom') end }
 S.messages = {}
-S.triggers['HookshotActivate'](); aim(); frames(2)
-S.actions['Use'](true); frames(30)
-check("an erroring isBusy is treated as free", last() == "Rope attached - fire again to reel in", last())
+local ok, err = pcall(S.triggers['HookshotActivate'])
+check("an erroring isBusy raises its error", not ok and tostring(err):find('boom', 1, true) ~= nil, err)
+aim(); frames(2)
+local okUse = pcall(S.actions['Use'], true); frames(30)
+check("and nothing is drawn or fired", not (last() or ''):find('Rope attached'), last())
 
 realPrint(("%d passed, %d failed"):format(pass, fail))
 if fail > 0 then os.exit(1) end

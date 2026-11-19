@@ -1940,6 +1940,14 @@ play through `I.AnimationController`, check the pairing first.
   module's own PLAYER script — the two halves of
   `if world then registerGroup else registerPage end`. Annotating it `global`
   describes half of what it does. `runtime` covers it.
+- **One manifest line per script path, all flags on it.** In OpenMW 0.52 a path
+  listed twice in one `.omwscripts` loads without any error, and the **last
+  line's flags replace the first's**. HookShot listed `actorAnim.lua` as
+  `NPC: …` then `CREATURE: …`, and the engine's script list showed it attached
+  to CREATURE only; NPCs never had it, so the dragged-in pose never played on
+  anything (creatures lack the clip). Write `NPC, CREATURE: path`. Check with
+  the verbose log: each script is listed with its flags (`#69 NPC CREATURE :
+  scripts/...`) at startup (measured 2026-11-19).
 - **Bundle shared libraries, do not copy them in.** Version-guard the file
   itself (`if I.X and I.X.version >= MY_VERSION then return end`) so only the
   newest loaded copy runs. `AnimRefresh`, `SharedRay`, `SuperSettingsRenderers`.
@@ -2440,8 +2448,9 @@ documentation. Do not weaken the comment-stripping to accommodate it.
     about, not on whichever handler is convenient (§3.4).
 19. Did you write MWScript? Every command that should affect the player needs
     the `player->` prefix (§3.7).
-20. Did you touch a `.omwscripts`? One path, one flag set — a duplicate is a
-    fatal load error (§3.6). And check whether the framework loads its modules
+20. Did you touch a `.omwscripts`? One path, one line, every flag on it
+    (`NPC, CREATURE: …`). A second line for the same path is not an error: it
+    silently replaces the first line's flags (§3.6). And check whether the framework loads its modules
     itself before writing a manifest at all. If you bumped a bundled library's
     version, **rename the file** (§3.6).
 21. Is a setting rendering blank? With an `l10n` context, `name`, `description`

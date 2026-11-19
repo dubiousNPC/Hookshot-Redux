@@ -1,11 +1,12 @@
 blending_rules:
-  # Base: 0.2-0.4s.
+  # Base: the documented reasonable range is 0.2-0.4s.
   - from: "*"
     to: "*"
     easing: "sineOut"
     duration: 0.25
 
-  # Bottom-most rule wins.
+  # Bottom-most rule wins. HookShot's clips under 0.75s blend in a third
+  # of their length, or they never fully assert before they end.
   - from: "*"
     to: "hookgo: *"
     easing: "sineOut"

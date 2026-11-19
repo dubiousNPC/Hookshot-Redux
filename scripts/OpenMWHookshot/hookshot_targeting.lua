@@ -32,10 +32,13 @@ end
 -- ==============================================
 -- CONSTANTS
 -- ==============================================
+-- Every hookshot ray and collision-aware move uses this mask (water excluded);
+-- player.lua and hookshot_physics.lua take it from here.
 local HOOKSHOT_PHY = nearby.COLLISION_TYPE.World
                    + nearby.COLLISION_TYPE.Door
                    + nearby.COLLISION_TYPE.HeightMap
                    + nearby.COLLISION_TYPE.Actor
+Targeting.HOOKSHOT_PHY = HOOKSHOT_PHY
 
 -- Ledge edge detection
 local PLAYER_HEIGHT = U.PLAYER_HEIGHT

@@ -4,6 +4,7 @@
 -- lease: replacePathPoints renews it, so a rope cannot outlive the mod.
 
 local world = require("openmw.world")
+local vfs = require("openmw.vfs")
 
 local BeamFXAdapter =
     require("scripts.OpenMWHookshot.example_beam_consumer.beamfx_adapter")
@@ -60,11 +61,14 @@ local SLACK_CHAIN = {
 -- Re-seed rather than drag the chain across a jump this big.
 local SLACK_RESEED_DISTANCE = 600
 
+-- BeamFX is optional: without it the slack rope is drawn straight. Absence is
+-- tested with a file check, not a pcall, so a broken verlet.lua still raises.
+local VERLET_PATH = "scripts/beamfx/shared/verlet.lua"
 local verletModule = nil
 local function verlet()
     if verletModule == nil then
-        local ok, mod = pcall(require, "scripts.beamfx.shared.verlet")
-        verletModule = (ok and type(mod) == "table" and mod.newChain) and mod or false
+        verletModule = vfs.fileExists(VERLET_PATH)
+            and require("scripts.beamfx.shared.verlet") or false
     end
     return verletModule or nil
 end

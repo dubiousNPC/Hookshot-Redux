@@ -11,20 +11,15 @@ local I = require('openmw.interfaces')
 -- object this script moves. One per player, created on the first update and
 -- removed on the last.
 --
--- KEPT OUT OF SAVES BY HAND. This used to set `dart.saveState = false`, which
--- is not a property in OpenMW 0.52: the write raised "sol: cannot write to a
--- readonly property" on EVERY update (after the teleport, so the dart still
--- moved, with an error per frame in the log). Nothing in the Lua API stops an
--- object being saved, so a save taken while tethered stored the dart and the
--- load left it hanging in the world. Instead the live darts go into this
--- script's own save data and are removed on load.
+-- KEPT OUT OF SAVES BY HAND. Nothing in the Lua API stops an object being
+-- saved (0.52 has no `saveState` property; writing one raises every update),
+-- so the live darts go into this script's own save data and are removed on
+-- load. Otherwise a save taken while tethered leaves the dart in the world.
 --
 -- KEYED BY THE OWNER'S id, NOT THE OBJECT. Each event hands this script its
--- own userdata for the player, so a table keyed by the object missed on the
--- end event: the dart was never removed (measured in OpenMW 0.52: found=false
--- with one dart tracked, after every hang). It stayed in the world as a
--- pickup, and the aim cone preferred it as an item target over the surface
--- being aimed at, so the next shot pulled the old dart instead of hooking.
+-- own userdata for the player, so an object key misses on the end event and
+-- the dart is never removed: it stays as a pickup that the aim cone then
+-- prefers over the surface being aimed at.
 local DART_RECORD = "dbs_hookshot_dart"
 local darts = {}   -- owner.id -> dart
 

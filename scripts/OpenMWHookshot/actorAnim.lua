@@ -44,8 +44,8 @@ local function onActorHooked(data)
     if not playing then
         playing = true
         anim.playBlended(self, GROUP, {
-            startKey = "loop start",
-            stopKey = "loop stop",
+            startKey = "start",
+            stopKey = "stop",
             priority = PRIORITY,
             blendMask = BLEND_MASK,
             loops = 0,

@@ -57,10 +57,7 @@ local Player = types.Player
 -- CONSTANTS
 -- ==============================================
 -- Hookshot collision mask: exclude water so hookshot works while swimming
-local HOOKSHOT_PHY = nearby.COLLISION_TYPE.World
-                   + nearby.COLLISION_TYPE.Door
-                   + nearby.COLLISION_TYPE.HeightMap
-                   + nearby.COLLISION_TYPE.Actor
+local HOOKSHOT_PHY = Targeting.HOOKSHOT_PHY
 
 local RAYCAST_THROTTLE = 3          -- Only raycast every N frames for targeting
 -- Falling pose played on a hooked actor while it is dragged in. Duration is a
@@ -81,6 +78,7 @@ local LAUNCH_TIMEOUT = 2.5
 local DART_MIN_MOVE = 2.0
 
 local HOOKED_ACTOR_EVENT = "Dubious_HookShot_ActorHooked"
+local RELEASED_ACTOR_EVENT = "Dubious_HookShot_ActorReleased"
 local ACTOR_FALL_DURATION = 1.5
 
 local LANDING_DURATION = 0.4        -- How long the landing state lasts (physics settle time)
@@ -332,6 +330,12 @@ local function clearRopeState()
 end
 
 local function endActiveRope()
+    -- An actor pull ends here, arrived or aborted: end its dragged-in pose now
+    -- rather than on actorAnim's timer (measured: the pull takes ~0.6 s).
+    local hooked = state.rope.target
+    if state.rope.phase == ROPE_PHASE_TARGET_PULL and isActor(hooked) and hooked:isValid() then
+        hooked:sendEvent(RELEASED_ACTOR_EVENT)
+    end
     if state.rope.active then
         local endRope = ropeInterfaceMethod("endRope")
         if endRope then
@@ -810,7 +814,7 @@ local function handleSequenceCompletion(event)
                 setMode(HookshotState.HANGING)
 
                 local activeEffects = types.Actor.activeEffects(self)
-                if activeEffects then
+                if activeEffects and not state.hanging.levitationApplied then
                     activeEffects:modify(RAPPEL_LEVITATION_MAGNITUDE, core.magic.EFFECT_TYPE.Levitate)
                     state.hanging.levitationApplied = true
                     debugPrint("Levitation applied for hanging state")
@@ -1191,7 +1195,7 @@ end
 -- ==============================================
 -- TETHER AND SWING
 -- ==============================================
-local SWING_GRAVITY = 9.80665 * 400
+local SWING_GRAVITY = Physics.GRAVITY
 
 local function applySwingLevitation()
     if state.swing.levitationApplied then return end
@@ -1716,8 +1720,7 @@ end
 local function seatedByTakeASeat()
     local T = I.TakeASeat
     if not (T and T.isBusy) then return false end
-    local ok, busy = pcall(T.isBusy)
-    return ok and busy == true
+    return T.isBusy() == true
 end
 
 local function fireHookshot()

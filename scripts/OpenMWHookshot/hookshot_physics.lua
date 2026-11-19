@@ -22,10 +22,7 @@ local Physics = {}
 -- COLLISION MASKS
 -- ==============================================
 local ANY_PHY = nearby.COLLISION_TYPE.AnyPhysical
-local HOOKSHOT_PHY = nearby.COLLISION_TYPE.World
-                   + nearby.COLLISION_TYPE.Door
-                   + nearby.COLLISION_TYPE.HeightMap
-                   + nearby.COLLISION_TYPE.Actor
+local HOOKSHOT_PHY = require('scripts.OpenMWHookshot.hookshot_targeting').HOOKSHOT_PHY
 
 -- ==============================================
 -- PHYSICS CONSTANTS
@@ -50,6 +47,7 @@ local PLAYER_HEIGHT = U.PLAYER_HEIGHT
 local M_TO_UNITS = 400              -- Gut-feel conversion from meters to Morrowind distance units
 local TERMINAL_VELOCITY = 53 * M_TO_UNITS
 local GRAVITY_MS2 = 9.80665 * M_TO_UNITS
+Physics.GRAVITY = GRAVITY_MS2   -- the swing pendulum uses the same g
 
 -- ==============================================
 -- INTERNAL STATE
