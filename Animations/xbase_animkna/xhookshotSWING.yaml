@@ -1,0 +1,37 @@
+blending_rules:
+  # Base: the documented reasonable range is 0.2-0.4s.
+  - from: "*"
+    to: "*"
+    easing: "sineOut"
+    duration: 0.25
+
+  # Bottom-most rule wins. HookShot's clips under 0.75s blend in a third
+  # of their length, or they never fully assert before they end.
+  - from: "*"
+    to: "hookgo: *"
+    easing: "sineOut"
+    duration: 0.22   # clip is 0.67s
+  - from: "*"
+    to: "hookhang: *"
+    easing: "sineOut"
+    duration: 0.14   # clip 0.17s at speed 0.4
+  - from: "*"
+    to: "hookhangdwn: *"
+    easing: "sineOut"
+    duration: 0.22   # clip 0.33s at speed 0.5
+  - from: "*"
+    to: "hookhangup: *"
+    easing: "sineOut"
+    duration: 0.22   # clip 0.33s at speed 0.5
+  - from: "*"
+    to: "hookitem: *"
+    easing: "sineOut"
+    duration: 0.22   # clip is 0.67s
+  - from: "*"
+    to: "hookoff: *"
+    easing: "sineOut"
+    duration: 0.10   # clip 1.0s at speed 1.5; handoff window is ~0.32s
+  - from: "*"
+    to: "hookshoot: *"
+    easing: "sineOut"
+    duration: 0.17   # clip is 0.5s
